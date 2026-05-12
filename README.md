@@ -7,7 +7,7 @@
 
 ⚠️ **Disclaimer**: This tool is strictly intended for educational and professional use within the framework of authorized penetration testing. The author declines all responsibility for any illegal use.
 
----
+![screenshot](https://github.com/ZetaOrioniss/revshell/assets/example.png)
 
 ## 1. Why use REVSHELL?
 
