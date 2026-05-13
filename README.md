@@ -69,6 +69,7 @@ Launch the interactive interface with the following command:
 
 | Command | Description |
 | --- | --- |
+| `load config` | load the IP and Port configuration, the configuration is save when you set ip and set port
 | `set ip <address>` | Sets the local IP (**LHOST**). *Aliases: host, lhost* |
 | `set port <port>` | Sets the local port (**LPORT**). *Alias: lport* |
 | `unset ip|port` | Clears the configured value. |
@@ -104,8 +105,9 @@ Launch the interactive interface with the following command:
 
 ### ⚙️ Setting Parameters
 
-Before generating a shell, you must define your listening IP address (**LHOST**) and your port (**LPORT**). The console supports auto-completion with the `Tab` key.
+Before generating a shell, you must define your listening IP address (**LHOST**) and your port (**LPORT**) or load existing IP and Port. The console supports auto-completion with the `Tab` key.
 
+* `load config`: Load the configuration file 
 * `set ip 10.10.14.5`: Sets your machine's IP address.
 * `set port 4444`: Sets the local port for the incoming connection.
 * `show options`: Displays current configuration for verification.
