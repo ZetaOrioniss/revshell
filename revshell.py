@@ -6,6 +6,7 @@ import readline
 import subprocess
 import shutil
 from dataclasses import dataclass
+import json
 
 
 class C:
@@ -172,6 +173,29 @@ def start_listener(port: str, use_rlwrap: bool = False) -> None:
         print(C.r(f"  [-] Could not execute '{cmd[0]}'."))
 
 
+def load_config() -> dict:
+    try:
+        with open("conf.json", "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"param": {"host": "", "port": ""}}
+
+def change_config(host: str | None = None, port: str | None = None) -> None:
+    config = load_config()
+    if "param" not in config:
+        config["param"] = {}
+
+    if host is not None:
+        config["param"]["host"] = host
+    if port is not None:
+        config["param"]["port"] = port
+
+    try:
+        with open("conf.json", "w") as f:
+            json.dump(config, f, indent=4)
+    except IOError as e:
+        print(C.r(f"  [-] Failed to write config: {e}"))
+
 BANNER = f"""
 {C.BOLD}{C.RED}
   ██████╗ ███████╗██╗   ██╗███████╗██╗  ██╗███████╗██╗     ██╗
@@ -187,11 +211,13 @@ BANNER = f"""
 """
 
 HELP = f"""
-{C.BOLD}{C.YELLOW}╔══════════════════════════════════════════════════════════════╗
-║                       COMMANDS                               ║
+{C.BOLD}{C.YELLOW}
+╔══════════════════════════════════════════════════════════════╗
+║                           COMMANDS                           ║
 ╚══════════════════════════════════════════════════════════════╝{C.END}
 
   {C.bold('Configuration')}
+  {C.g('load config')}              Load configuration from conf.json
   {C.g('set ip <address>')}         Set LHOST  (aliases: host, lhost)
   {C.g('set port <port>')}          Set LPORT  (alias: lport)
   {C.g('unset ip|port')}            Clear a value
@@ -263,9 +289,9 @@ def print_payload_list() -> None:
     print()
 
 
-COMMANDS   = ["set", "unset", "use", "run", "generate", "show",
+COMMANDS   = ["load", "set", "unset", "use", "run", "generate", "show",
               "listener", "rlwrap", "clear", "help", "exit", "quit"]
-SET_KEYS   = ["ip", "port", "lhost", "lport", "host"]
+SET_KEYS   = ["config", "ip", "port", "lhost", "lport", "host"]
 SHOW_OPTS  = ["payloads", "options"]
 SHELL_KEYS = [p.key for p in PAYLOADS]
 
@@ -334,6 +360,27 @@ def run_console() -> None:
         elif cmd == "clear":
             print("\033[2J\033[H", end="")
             print(BANNER)
+        
+        elif cmd == "load":
+            if len(args) != 1 or args[0].lower() != "config":
+                print(C.r("  Usage: load config"))
+            else:
+                config = load_config()
+                param  = config.get("param", {})
+                host   = param.get("host", "")
+                port   = param.get("port", "")
+
+                if host:
+                    session.lhost = host
+                    print(f"  {C.dim('LHOST loaded from config:')} {C.g(host)}")
+                else:
+                    print(C.dim("  LHOST not set in config. Run 'set ip <address>' to set it."))
+
+                if port:
+                    session.lport = port
+                    print(f"  {C.dim('LPORT loaded from config:')} {C.g(port)}")
+                else:
+                    print(C.dim("  LPORT not set in config. Run 'set port <port>' to set it."))
 
         elif cmd == "set":
             if len(args) < 2:
@@ -341,6 +388,10 @@ def run_console() -> None:
             elif session.set(args[0], args[1]):
                 label = "LHOST" if args[0].lower() in ("ip", "host", "lhost") else "LPORT"
                 print(f"  {C.dim(label)} => {C.g(args[1])}")
+                if label == "LHOST":
+                    change_config(host=args[1])
+                else:
+                    change_config(port=args[1])
             else:
                 print(C.r(f"  [-] Unknown key: '{args[0]}'  (ip, port)"))
 
@@ -351,9 +402,11 @@ def run_console() -> None:
                 k = args[0].lower()
                 if k in ("ip", "host", "lhost"):
                     session.lhost = None
+                    change_config(host="")
                     print(C.dim("  LHOST cleared."))
                 elif k in ("port", "lport"):
                     session.lport = None
+                    change_config(port="")
                     print(C.dim("  LPORT cleared."))
                 else:
                     print(C.r(f"  [-] Unknown key: '{args[0]}'"))
