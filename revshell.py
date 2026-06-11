@@ -16,13 +16,10 @@ import struct
 import json
 import re
 import base64
+import argparse
 from dataclasses import dataclass, field
 from typing import Optional
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Color / Style primitives
-# ─────────────────────────────────────────────────────────────────────────────
 
 class C:
     RED    = "\033[91m"
@@ -64,10 +61,11 @@ class C:
     @staticmethod
     def it(s):   return f"{C.ITALIC}{s}{C.END}"
 
+    @staticmethod
+    def strip(s: str) -> str:
+        """Remove all ANSI escape codes from a string."""
+        return re.sub(r'\033\[[0-9;]*m', '', s)
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Payload model
-# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class Payload:
@@ -81,10 +79,6 @@ class Payload:
     def render(self, lhost: str, lport: str) -> str:
         return self.template.format(lhost=lhost, lport=lport)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Payload registry
-# ─────────────────────────────────────────────────────────────────────────────
 
 PAYLOADS: list[Payload] = [
 
@@ -308,12 +302,11 @@ CATEGORY_LABELS = {
     "ruby":       "Ruby",
     "netcat":     "Netcat / BusyBox",
     "socat":      "Socat",
-    "other":      "Other (Lua, Go, Java, Node…)",
+    "other":      "Other (Lua, Go, Java, Node...)",
     "powershell": "PowerShell / Windows",
     "meterpreter":"Metasploit Stagers",
 }
 
-#PLATFORM_ICON = {"unix": "🐧", "windows": "🪟", "both": "🌐"}
 PLATFORM_ICON = {"unix": "", "windows": "", "both": ""}
 NC_CANDIDATES = ["nc", "ncat", "netcat"]
 
@@ -583,7 +576,7 @@ BANNER = f"""
 {C.END}{C.DIM}
   /etc/hosts manager console{C.END}
 {C.END}{C.DIM}  Author: {C.BOLD}{C.RED}@ZetaOrioniss{C.END}
-{C.END}{C.DIM}  Version: {C.BOLD}{C.RED}v1.2{C.END}
+{C.END}{C.DIM}  Version: {C.BOLD}{C.RED}v2.0{C.END}
 {C.DIM}
 {C.DIM}  Type {C.END}{C.BOLD}help{C.END}{C.DIM} to list available commands.{C.END}
 """
@@ -598,11 +591,11 @@ HELP = f"""
 
   {C.bold('NETWORK')}
   {C.g('ifconfig')}               List IPv4 interfaces
-  {C.g('ifconfig pick')}          Interactive picker → sets LHOST
+  {C.g('ifconfig pick')}          Interactive picker -> sets LHOST
 
   {C.bold('PAYLOADS')}
   {C.g('show')}                   List all payloads with keys
-  {C.g('show <category>')}        Filter by category (bash/python/php…)
+  {C.g('show <category>')}        Filter by category (bash/python/php...)
   {C.g('use <key>')}              Print a single payload
   {C.g('run')}                    Print all payloads (current config)
   {C.g('run <key>')}              Print one payload by key
@@ -641,7 +634,7 @@ def print_all_payloads(session: Session,
     W = 110
     title = f" {session.lhost or 'LHOST'}:{session.lport or 'LPORT'} "
     print(f"\n  {C.bold(C.WHITE + title.center(W - 2) + C.END)}")
-    print(f"  {C.grey('═' * W)}")
+    print(f"  {C.grey('=' * W)}")
 
     for cat in CATEGORIES:
         if cat_filter and cat != cat_filter:
@@ -653,7 +646,7 @@ def print_all_payloads(session: Session,
 
         label = CATEGORY_LABELS.get(cat, cat.upper())
         print(f"\n  {C.bold(C.CYAN + '  ' + label.upper() + C.END)}")
-        print(f"  {C.grey('·' * W)}")
+        print(f"  {C.grey('.' * W)}")
 
         for p in bucket:
             icon = PLATFORM_ICON.get(p.platform, "")
@@ -663,9 +656,9 @@ def print_all_payloads(session: Session,
             name_col = C.bold(p.name)
             print(f"  {name_col}  {key_col}  {icon}{note}")
             print(f"  {C.GREEN}{cmd}{C.END}")
-            print(f"  {C.grey('·' * W)}")
+            print(f"  {C.grey('.' * W)}")
 
-    print(f"  {C.grey('═' * W)}\n")
+    print(f"  {C.grey('=' * W)}\n")
 
 
 def print_single_payload(p: Payload, session: Session) -> None:
@@ -673,22 +666,22 @@ def print_single_payload(p: Payload, session: Session) -> None:
     icon = PLATFORM_ICON.get(p.platform, "")
     W    = 80
 
-    print(f"\n  {C.grey('─' * W)}")
+    print(f"\n  {C.grey('-' * W)}")
     print(f"  {C.bold(C.WHITE)}{icon} {p.name}{C.END}  {C.grey(p.key)}  {C.grey('(' + p.platform + '/' + p.category + ')')}")
     if p.note:
         print(f"  {C.grey(p.note)}")
-    print(f"  {C.grey('─' * W)}")
+    print(f"  {C.grey('-' * W)}")
     print(f"\n  {C.GREEN}{cmd}{C.END}\n")
     if session.lport:
         print(f"  {C.grey('Listener:')}  nc -lvnp {session.lport}")
-    print(f"\n  {C.grey('─' * W)}\n")
+    print(f"\n  {C.grey('-' * W)}\n")
 
 
 def print_payload_list(cat_filter: Optional[str] = None) -> None:
     W = 70
-    print(f"\n  {C.grey('─' * W)}")
+    print(f"\n  {C.grey('-' * W)}")
     print(f"  {C.bold('  KEY'):<{28+len(C.BOLD)+len(C.END)}}{C.bold('NAME'):<22}{C.bold('OS'):<14}{C.bold('CATEGORY')}")
-    print(f"  {C.grey('─' * W)}")
+    print(f"  {C.grey('-' * W)}")
     last_cat = None
     for p in PAYLOADS:
         if cat_filter and p.category != cat_filter:
@@ -699,7 +692,7 @@ def print_payload_list(cat_filter: Optional[str] = None) -> None:
             print(f"\n  {C.bold(C.CYAN + '  ' + label + C.END)}")
         icon = PLATFORM_ICON.get(p.platform, "")
         print(f"  {C.g(p.key):<{26+len(C.GREEN)+len(C.END)}}{p.name:<22}{icon + ' ' + p.platform:<14}")
-    print(f"\n  {C.grey('─' * W)}\n")
+    print(f"\n  {C.grey('-' * W)}\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -757,16 +750,192 @@ readline.parse_and_bind("tab: complete")
 def prompt(session: Session) -> str:
     h = session.lhost or C.grey("-")
     p = session.lport or C.grey("-")
-    return f"{C.BOLD}{C.RED}revshell{C.END} {C.grey(f'({h}:{p})')} {C.BOLD}{C.GREEN}›{C.END} "
+    return f"{C.BOLD}{C.RED}revshell{C.END} {C.grey(f'({h}:{p})')} {C.BOLD}{C.GREEN}>{C.END} "
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Main loop
+#  CLI argument parser
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_console() -> None:
-    print(BANNER)
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="revshell",
+        description="Reverse Shell Generator — interactive console or one-shot CLI",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  revshell.py                                  # interactive console\n"
+            "  revshell.py -H 10.10.14.5 -P 4444           # console with LHOST/LPORT pre-set\n"
+            "  revshell.py -H 10.10.14.5 -P 4444 -u bash_tcp\n"
+            "                                               # print one payload and exit\n"
+            "  revshell.py -H 10.10.14.5 -P 4444 --all     # print all payloads and exit\n"
+            "  revshell.py -H 10.10.14.5 -P 4444 --all --unix --cat python\n"
+            "                                               # filter: unix python payloads\n"
+            "  revshell.py --list                           # list payload keys and exit\n"
+            "  revshell.py --list --cat netcat              # list netcat payloads only\n"
+            "  revshell.py --ifconfig                       # list interfaces and exit\n"
+            "  revshell.py -H tun0 -P 4444 -u socat        # resolve interface name to IP\n"
+            "  revshell.py -H 10.10.14.5 -P 4444 --listen  # start nc listener and exit\n"
+            "  revshell.py -H 10.10.14.5 -P 4444 --rlwrap  # start rlwrap listener and exit\n"
+            "  revshell.py -H 10.0.0.1 -P 4444 -u bash_tcp --raw | xclip\n"
+            "                                               # bare command, pipe-friendly\n"
+        )
+    )
+
+    # ── Connection params ────────────────────────────────────────────────────
+    conn = parser.add_argument_group("connection")
+    conn.add_argument(
+        "-H", "--host", metavar="LHOST",
+        help="Attacker IP or interface name (e.g. 10.10.14.5, tun0, eth0)"
+    )
+    conn.add_argument(
+        "-P", "--port", metavar="LPORT",
+        help="Listener port (e.g. 4444)"
+    )
+
+    # ── One-shot payload output ───────────────────────────────────────────────
+    out = parser.add_argument_group("one-shot output (non-interactive)")
+    out.add_argument(
+        "-u", "--use", metavar="KEY",
+        help="Print a single payload by key and exit"
+    )
+    out.add_argument(
+        "--all", action="store_true",
+        help="Print all payloads and exit (respects --unix/--windows/--cat)"
+    )
+    out.add_argument(
+        "--list", action="store_true",
+        help="List payload keys/names in table view and exit"
+    )
+    out.add_argument(
+        "--raw", action="store_true",
+        help=(
+            "With -u/--use: output bare command only, no decoration, no colors.\n"
+            "Useful for piping: revshell.py -H 10.0.0.1 -P 4444 -u bash_tcp --raw | xclip"
+        )
+    )
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    flt = parser.add_argument_group("filters")
+    flt.add_argument(
+        "--unix", action="store_true",
+        help="Show Unix/Linux payloads only"
+    )
+    flt.add_argument(
+        "--windows", action="store_true",
+        help="Show Windows payloads only"
+    )
+    flt.add_argument(
+        "--cat", metavar="CATEGORY",
+        choices=CATEGORIES,
+        help="Filter by category: " + ", ".join(CATEGORIES)
+    )
+
+    # ── Listener ──────────────────────────────────────────────────────────────
+    lst = parser.add_argument_group("listener")
+    lst.add_argument(
+        "--listen", action="store_true",
+        help="Start nc -lvnp <LPORT> and exit (requires -P)"
+    )
+    lst.add_argument(
+        "--rlwrap", action="store_true",
+        help="Start rlwrap nc -lvnp <LPORT> and exit (requires -P)"
+    )
+
+    # ── Misc ──────────────────────────────────────────────────────────────────
+    misc = parser.add_argument_group("misc")
+    misc.add_argument(
+        "--ifconfig", action="store_true",
+        help="List IPv4 interfaces and exit"
+    )
+    misc.add_argument(
+        "--no-banner", dest="no_banner", action="store_true",
+        help="Suppress the banner in interactive mode"
+    )
+
+    return parser
+
+
+def run_cli(args: argparse.Namespace) -> int:
+    """
+    Execute non-interactive CLI actions.
+    Returns 0 on success, 1 on error.
+    Sentinel -1 means no non-interactive flag matched (launch console instead).
+    """
     session = Session()
+
+    # Resolve LHOST — may be an interface name
+    if args.host:
+        if is_interface_name(args.host):
+            ip = resolve_iface_ip(args.host)
+            if ip is None:
+                print(C.r(f"  Interface '{args.host}' not found. Run --ifconfig to list."),
+                      file=sys.stderr)
+                return 1
+            session.lhost = ip
+        else:
+            session.lhost = args.host
+
+    if args.port:
+        session.lport = args.port
+
+    # ── --ifconfig ────────────────────────────────────────────────────────────
+    if args.ifconfig:
+        print_interfaces()
+        return 0
+
+    # ── --list ────────────────────────────────────────────────────────────────
+    if args.list:
+        print_payload_list(cat_filter=args.cat)
+        return 0
+
+    # ── --use / -u ────────────────────────────────────────────────────────────
+    if args.use:
+        key = args.use.lower()
+        if key not in PAYLOAD_MAP:
+            print(C.r(f"  Unknown payload key: '{args.use}'"), file=sys.stderr)
+            print(C.grey("  Run --list to see available keys."), file=sys.stderr)
+            return 1
+        p = PAYLOAD_MAP[key]
+        if args.raw:
+            # Bare command — no ANSI, no decoration; pipe-friendly
+            lhost = session.lhost or "<LHOST>"
+            lport = session.lport or "<LPORT>"
+            print(p.render(lhost, lport))
+        else:
+            print_single_payload(p, session)
+        return 0
+
+    # ── --all ─────────────────────────────────────────────────────────────────
+    if args.all:
+        platform_filter: Optional[str] = None
+        if args.unix:
+            platform_filter = "unix"
+        elif args.windows:
+            platform_filter = "windows"
+        print_all_payloads(session, platform_filter=platform_filter, cat_filter=args.cat)
+        return 0
+
+    # ── --listen / --rlwrap ───────────────────────────────────────────────────
+    if args.listen or args.rlwrap:
+        if not session.lport:
+            print(C.r("  LPORT not set — pass -P <port>"), file=sys.stderr)
+            return 1
+        start_listener(session.lport, use_rlwrap=args.rlwrap)
+        return 0
+
+    return -1   # Sentinel: no non-interactive action matched
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Main interactive loop
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_console(session: Optional[Session] = None, no_banner: bool = False) -> None:
+    if not no_banner:
+        print(BANNER)
+    if session is None:
+        session = Session()
 
     while True:
         try:
@@ -793,8 +962,8 @@ def run_console() -> None:
             print(C.r(f"  Parse error: {e}"))
             continue
 
-        cmd  = parts[0].lower()
-        args = parts[1:]
+        cmd      = parts[0].lower()
+        args_lst = parts[1:]
 
         # ── exit ──────────────────────────────────────────────────────────
         if cmd in ("exit", "quit"):
@@ -820,7 +989,7 @@ def run_console() -> None:
 
         # ── load config ───────────────────────────────────────────────────
         elif cmd == "load":
-            if len(args) != 1 or args[0].lower() != "config":
+            if len(args_lst) != 1 or args_lst[0].lower() != "config":
                 print(f"  {C.r('Usage: load config')}")
             else:
                 config = load_config()
@@ -840,32 +1009,32 @@ def run_console() -> None:
 
         # ── set ───────────────────────────────────────────────────────────
         elif cmd == "set":
-            if len(args) < 2:
+            if len(args_lst) < 2:
                 print(f"  {C.r('Usage: set <ip|port> <value|iface>')}")
             else:
-                ok, resolved = session.set(args[0], args[1])
+                ok, resolved = session.set(args_lst[0], args_lst[1])
                 if ok:
-                    label = "LHOST" if args[0].lower() in ("ip","host","lhost") else "LPORT"
-                    display = resolved if resolved else args[1]
-                    extra   = f"  {C.grey('(from interface ' + args[1] + ')')}" if resolved else ""
+                    label   = "LHOST" if args_lst[0].lower() in ("ip","host","lhost") else "LPORT"
+                    display = resolved if resolved else args_lst[1]
+                    extra   = f"  {C.grey('(from interface ' + args_lst[1] + ')')}" if resolved else ""
                     print(f"  {label}  {C.grey('=>')}  {C.g(display)}{extra}")
                     if label == "LHOST":
                         change_config(host=display)
                     else:
                         change_config(port=display)
                 else:
-                    if args[0].lower() in ("ip","host","lhost") and is_interface_name(args[1]):
-                        print(f"  {C.r(f"Interface '{args[1]}' not found.")}")
+                    if args_lst[0].lower() in ("ip","host","lhost") and is_interface_name(args_lst[1]):
+                        print(f"  {C.r(f'Interface {repr(args_lst[1])} not found.')}")
                         print(f"  {C.grey('Run')} ifconfig {C.grey('to list available interfaces.')}")
                     else:
-                        print(f"  {C.r(f"Unknown key: '{args[0]}' (ip, port)")}")
+                        print(f"  {C.r(f'Unknown key: {repr(args_lst[0])} (ip, port)')}")
 
         # ── unset ─────────────────────────────────────────────────────────
         elif cmd == "unset":
-            if not args:
+            if not args_lst:
                 print(f"  {C.r('Usage: unset <ip|port>')}")
             else:
-                k = args[0].lower()
+                k = args_lst[0].lower()
                 if k in ("ip","host","lhost"):
                     session.lhost = None
                     change_config(host="")
@@ -875,11 +1044,11 @@ def run_console() -> None:
                     change_config(port="")
                     print(f"  {C.grey('LPORT cleared.')}")
                 else:
-                    print(f"  {C.r(f"Unknown key: '{args[0]}'")}")
+                    print(f"  {C.r(f'Unknown key: {repr(args_lst[0])}')}")
 
         # ── show ──────────────────────────────────────────────────────────
         elif cmd == "show":
-            sub = args[0].lower() if args else ""
+            sub = args_lst[0].lower() if args_lst else ""
             if sub == "options":
                 h = C.g(session.lhost) if session.lhost else C.r("not set")
                 p = C.g(session.lport) if session.lport else C.r("not set")
@@ -890,11 +1059,11 @@ def run_console() -> None:
             elif sub in ("payloads", "shells", ""):
                 print_payload_list()
             else:
-                print(f"  {C.r(f"Unknown option: '{sub}'")}")
+                print(f"  {C.r(f'Unknown option: {repr(sub)}')}")
 
         # ── ifconfig / interfaces ─────────────────────────────────────────
         elif cmd in ("ifconfig", "interfaces"):
-            sub = args[0].lower() if args else ""
+            sub    = args_lst[0].lower() if args_lst else ""
             ifaces = get_interfaces()
             if sub == "pick":
                 interactive_iface_picker(session)
@@ -906,14 +1075,14 @@ def run_console() -> None:
 
         # ── use ───────────────────────────────────────────────────────────
         elif cmd == "use":
-            if not args:
-                print(f"  {C.r("Usage: use <key>  —  run 'show' to list keys")}")
+            if not args_lst:
+                print(f"  {C.r('Usage: use <key>  — run show to list keys')}")
             else:
-                key = args[0].lower()
+                key = args_lst[0].lower()
                 if key in PAYLOAD_MAP:
                     print_single_payload(PAYLOAD_MAP[key], session)
                 else:
-                    print(f"  {C.r(f"Unknown payload: '{args[0]}'")}")
+                    print(f"  {C.r(f'Unknown payload: {repr(args_lst[0])}')}")
 
         # ── run / generate ────────────────────────────────────────────────
         elif cmd in ("run", "generate"):
@@ -921,14 +1090,14 @@ def run_console() -> None:
             cat_filter: Optional[str]      = None
             remaining: list[str]           = []
             i = 0
-            while i < len(args):
-                a = args[i]
+            while i < len(args_lst):
+                a = args_lst[i]
                 if a in ("--unix", "-u"):
                     platform_filter = "unix"
                 elif a in ("--windows", "-w"):
                     platform_filter = "windows"
-                elif a in ("--cat", "-c") and i + 1 < len(args):
-                    cat_filter = args[i + 1].lower()
+                elif a in ("--cat", "-c") and i + 1 < len(args_lst):
+                    cat_filter = args_lst[i + 1].lower()
                     i += 1
                 else:
                     remaining.append(a)
@@ -938,7 +1107,7 @@ def run_console() -> None:
                 if key in PAYLOAD_MAP:
                     print_single_payload(PAYLOAD_MAP[key], session)
                 else:
-                    print(f"  {C.r(f"Unknown payload: '{remaining[0]}'")}")
+                    print(f"  {C.r(f'Unknown payload: {repr(remaining[0])}')}")
             else:
                 print_all_payloads(session, platform_filter, cat_filter)
 
@@ -958,9 +1127,45 @@ def run_console() -> None:
 
         # ── unknown ───────────────────────────────────────────────────────
         else:
-            print(f"  {C.r(f"Unknown command: '{cmd}'")}")
-            print(f"  {C.grey('Type')} help {C.grey('for available commands.')}")
+            os.system(cmd)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Entry point
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    run_console()
+    parser = build_arg_parser()
+    cli_args = parser.parse_args()
+
+    # Detect whether any non-interactive flag was passed
+    non_interactive = any([
+        cli_args.all,
+        cli_args.use,
+        cli_args.list,
+        cli_args.listen,
+        cli_args.rlwrap,
+        cli_args.ifconfig,
+    ])
+
+    if non_interactive:
+        rc = run_cli(cli_args)
+        sys.exit(0 if rc >= 0 else 1)
+    else:
+        # Interactive console — optionally pre-seed session from CLI args
+        session = Session()
+        if cli_args.host:
+            if is_interface_name(cli_args.host):
+                ip = resolve_iface_ip(cli_args.host)
+                if ip:
+                    session.lhost = ip
+                    print(f"  LHOST  {C.grey('=>')}  {C.g(ip)}  {C.grey('(from ' + cli_args.host + ')')}")
+                else:
+                    print(C.r(f"  Interface '{cli_args.host}' not found."), file=sys.stderr)
+                    sys.exit(1)
+            else:
+                session.lhost = cli_args.host
+        if cli_args.port:
+            session.lport = cli_args.port
+
+        run_console(session=session, no_banner=cli_args.no_banner)
