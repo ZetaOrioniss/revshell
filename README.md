@@ -2,20 +2,29 @@
 <div align="center">
 
 ```
-██████╗ ███████╗██╗   ██╗███████╗██╗  ██╗███████╗██╗     ██╗
-██╔══██╗██╔════╝██║   ██║██╔════╝██║  ██║██╔════╝██║     ██║
-██████╔╝█████╗  ██║   ██║███████╗███████║█████╗  ██║     ██║
-██╔══██╗██╔══╝  ╚██╗ ██╔╝╚════██║██╔══██║██╔══╝  ██║     ██║
-     ██║  ██║███████╗ ╚████╔╝ ███████║██║  ██║███████╗███████╗███████╗
-     ╚═╝  ╚═╝╚══════╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝
+                           _            .x+=:.                                ..       .. 
+                          u            z`    ^%    .uef^"               x .d88"  x .d88"  
+   .u    .               88Nu.   u.       .   <k :d88E                   5888R    5888R   
+ .d88B :@8c       .u    '88888.o888c    .@8Ned8" `888E            .u     '888R    '888R   
+="8888f8888r   ud8888.   ^8888  8888  .@^%8888"   888E .z8k    ud8888.    888R     888R   
+  4888>'88"  :888'8888.   8888  8888 x88:  `)8b.  888E~?888L :888'8888.   888R     888R   
+  4888> '    d888 '88%"   8888  8888 8888N=*8888  888E  888E d888 '88%"   888R     888R   
+  4888>      8888.+"      8888  8888  %8"    R88  888E  888E 8888.+"      888R     888R   
+ .d888L .+   8888L       .8888b.888P   @8Wou 9%   888E  888E 8888L        888R     888R   
+ ^"8888*"    '8888c. .+   ^Y8888*""  .888888P`    888E  888E '8888c. .+  .888B .  .888B . 
+    "Y"       "88888%       `Y"      `   ^"F     m888N= 888>  "88888%    ^*888%   ^*888%  
+                "YP'                              `Y"   888     "YP'       "%       "%    
+                                                       J88"                               
+                                                       @%                                 
+                                                     :"                                   
 ```
 
 **Interactive reverse shell generator console — msfconsole-style**
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey?style=flat-square&logo=linux)](https://github.com)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square&logo=linux)](https://github.com)
 [![License](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-v1.1-red?style=flat-square)](https://github.com/ZetaOrioniss/revshell)
+[![Version](https://img.shields.io/badge/Version-v1.2-red?style=flat-square)](https://github.com/ZetaOrioniss/revshell)
 [![Payloads](https://img.shields.io/badge/Payloads-Invicti-ef4444?style=flat-square)](https://www.invicti.com)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/ZetaOrioniss/revshell/pulls)
 
