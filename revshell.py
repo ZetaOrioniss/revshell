@@ -313,7 +313,8 @@ CATEGORY_LABELS = {
     "meterpreter":"Metasploit Stagers",
 }
 
-PLATFORM_ICON = {"unix": "🐧", "windows": "🪟", "both": "🌐"}
+#PLATFORM_ICON = {"unix": "🐧", "windows": "🪟", "both": "🌐"}
+PLATFORM_ICON = {"unix": "", "windows": "", "both": ""}
 NC_CANDIDATES = ["nc", "ncat", "netcat"]
 
 
