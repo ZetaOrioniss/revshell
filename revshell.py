@@ -574,7 +574,7 @@ BANNER = f"""
 ║                          RevShell                            ║
 ╚══════════════════════════════════════════════════════════════╝
 {C.END}{C.DIM}
-  /etc/hosts manager console{C.END}
+  reverse shells payload manager console{C.END}s
 {C.END}{C.DIM}  Author: {C.BOLD}{C.RED}@ZetaOrioniss{C.END}
 {C.END}{C.DIM}  Version: {C.BOLD}{C.RED}v2.0{C.END}
 {C.DIM}
