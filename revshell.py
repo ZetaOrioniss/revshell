@@ -454,7 +454,7 @@ def _finalize_tty(sock: socket.socket, rows: int, cols: int, method: str) -> Non
     time.sleep(0.1)
     _recv_until(sock, timeout=0.5)
     print(f"  {C.g('[✔]')} Shell upgraded via {method} — enjoy!\r")
-    print(f"  {C.grey('Ctrl+C to exit shell')}\r\n")
+    print(f"  {C.grey('Press ENTER to continue')}\r\n")
     _relay_interactive(sock)
 
 
