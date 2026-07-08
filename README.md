@@ -23,7 +23,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square&logo=linux)](https://github.com)
 [![License](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-v2.0-red?style=flat-square)](https://github.com/ZetaOrioniss/revshell)
+[![Version](https://img.shields.io/badge/Version-v2.1-red?style=flat-square)](https://github.com/ZetaOrioniss/revshell)
 [![Payloads](https://img.shields.io/badge/Payloads-Invicti-ef4444?style=flat-square)](https://www.invicti.com)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/ZetaOrioniss/revshell/pulls)
 
