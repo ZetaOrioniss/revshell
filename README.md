@@ -60,6 +60,7 @@ revshell (10.10.14.5:4444) > use python3_pty
 | | Feature | Detail |
 |---|---|---|
 | 🖥️ | **Interactive REPL console** | Persistent session — set your config once, generate any payload instantly |
+| 🐚 | **Automated shell upgrade** | Detect availables dependencies on the target and upgrade the shell automatically |
 | 🔴 | **Dynamic prompt** | Always shows current `IP:PORT` — never lose track of your session state |
 | 🌐 | **Interface-aware LHOST** | Set LHOST from an interface name (`tun0`, `eth0`) — IP is resolved automatically |
 | 🖱️ | **Interactive interface picker** | `ifconfig pick` displays a numbered list — select by number or name |
@@ -73,7 +74,7 @@ revshell (10.10.14.5:4444) > use python3_pty
 | 🔍 | **Netcat auto-detection** | Checks for `nc`, `ncat`, `netcat` — gives clear install hint if missing |
 | 💾 | **Persistent config** | LHOST and LPORT saved to `conf.json` — reload anytime with `load config` |
 | ⌨️ | **Tab completion** | Commands, keys, payload names, and interface names all autocomplete |
-| ⬆️ | **Command history** | Navigate previous commands with arrow keys |
+| 📖 | **Command history** | Navigate previous commands with arrow keys |
 | 📦 | **Zero dependencies** | Pure Python standard library — nothing to install beyond Python 3.10 |
 
 ---
